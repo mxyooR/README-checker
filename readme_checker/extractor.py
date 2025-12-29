@@ -5,6 +5,10 @@
 1. 生态系统声明（npm, pip, docker 等构建工具）
 2. 路径声明（文件链接、图片引用）
 3. 夸大声明（Enterprise, Production-ready 等词汇）
+
+V3 增强：
+- 语义分析：理解否定句/条件句
+- 健壮命令提取：使用 shlex 处理复杂命令
 """
 
 import re
@@ -12,6 +16,17 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from readme_checker.parser import ParsedReadme, CodeBlock, Link
+
+# V3: Import semantic analysis and command extraction
+try:
+    from readme_checker.semantic.intent import classify_intent, Intent, ClassifiedInstruction
+    from readme_checker.extraction.commands import extract_commands, ExtractedCommand
+    SEMANTIC_AVAILABLE = True
+except ImportError:
+    SEMANTIC_AVAILABLE = False
+    Intent = None  # type: ignore
+    ClassifiedInstruction = None  # type: ignore
+    ExtractedCommand = None  # type: ignore
 
 
 # ============================================================
@@ -164,12 +179,14 @@ class ExtractedClaims:
         hype_claims: 夸大声明列表
         completeness_claims: 完整性声明列表
         module_claims: Python 模块调用声明列表
+        classified_commands: V3 - 带语义分类的命令列表
     """
     ecosystem_claims: list[EcosystemClaim] = field(default_factory=list)
     path_claims: list[PathClaim] = field(default_factory=list)
     hype_claims: list[HypeClaim] = field(default_factory=list)
     completeness_claims: list[CompletenessClaim] = field(default_factory=list)
     module_claims: list[ModuleClaim] = field(default_factory=list)
+    classified_commands: list["ClassifiedInstruction"] = field(default_factory=list)
 
 
 # ============================================================
@@ -407,7 +424,7 @@ def extract_claims(parsed: ParsedReadme) -> ExtractedClaims:
     # 合并文本内容：纯文本 + 原始内容（确保不遗漏）
     full_text = parsed.text_content + " " + parsed.raw_content
     
-    return ExtractedClaims(
+    claims = ExtractedClaims(
         ecosystem_claims=_extract_ecosystem_claims(full_text),
         path_claims=(
             _extract_path_claims_from_links(parsed.links) +
@@ -417,3 +434,80 @@ def extract_claims(parsed: ParsedReadme) -> ExtractedClaims:
         completeness_claims=_extract_completeness_claims(full_text),
         module_claims=_extract_module_claims(parsed.code_blocks),
     )
+    
+    # V3: Add semantic classification if available
+    if SEMANTIC_AVAILABLE:
+        claims.classified_commands = _extract_classified_commands(
+            parsed.code_blocks, 
+            parsed.raw_content
+        )
+    
+    return claims
+
+
+def _extract_classified_commands(
+    code_blocks: list[CodeBlock],
+    raw_content: str,
+) -> list["ClassifiedInstruction"]:
+    """
+    V3: 提取带语义分类的命令
+    
+    使用 shlex 进行健壮的命令解析，并使用意图分类器
+    判断命令是肯定指令、否定指令还是条件指令。
+    
+    Args:
+        code_blocks: 代码块列表
+        raw_content: README 原始内容（用于获取上下文）
+    
+    Returns:
+        分类后的命令列表
+    """
+    if not SEMANTIC_AVAILABLE:
+        return []
+    
+    classified: list[ClassifiedInstruction] = []
+    
+    for block in code_blocks:
+        lang = block.language.lower()
+        if lang not in ("bash", "shell", "sh", "zsh", "console", ""):
+            continue
+        
+        # 使用 V3 命令提取器
+        commands = extract_commands(block.content, lang)
+        
+        for cmd in commands:
+            # 获取命令周围的上下文
+            context = _get_command_context(raw_content, cmd.raw_text, block.line_number)
+            
+            # 分类意图
+            instruction = classify_intent(
+                text=context,
+                command=cmd.raw_text,
+                line_number=block.line_number + cmd.line_number,
+            )
+            
+            classified.append(instruction)
+    
+    return classified
+
+
+def _get_command_context(raw_content: str, command: str, line_number: int) -> str:
+    """
+    获取命令周围的上下文文本
+    
+    Args:
+        raw_content: README 原始内容
+        command: 命令文本
+        line_number: 命令所在行号
+    
+    Returns:
+        包含命令的上下文段落
+    """
+    lines = raw_content.split('\n')
+    
+    # 获取命令前后各 3 行作为上下文
+    start = max(0, line_number - 4)
+    end = min(len(lines), line_number + 3)
+    
+    context_lines = lines[start:end]
+    return '\n'.join(context_lines)

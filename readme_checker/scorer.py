@@ -5,12 +5,25 @@
 - 基础分 100 分
 - 每个违规扣除相应分数
 - 最终分数限制在 0-100 范围内
+
+V3 增强：
+- 加权评分：根据严重程度和类别加权
+- 比较上下文：提供有意义的评分解释
 """
 
 from dataclasses import dataclass
 from typing import Optional
 
 from readme_checker.verifier import VerificationResult, Violation
+
+# V3: Import weighted scorer
+try:
+    from readme_checker.metrics.scoring import WeightedTrustScorer, TrustScore
+    WEIGHTED_SCORER_AVAILABLE = True
+except ImportError:
+    WEIGHTED_SCORER_AVAILABLE = False
+    WeightedTrustScorer = None  # type: ignore
+    TrustScore = None  # type: ignore
 
 
 # ============================================================
@@ -158,3 +171,54 @@ def calculate_score(result: VerificationResult) -> ScoreBreakdown:
     breakdown.rating_description = RATING_DESCRIPTIONS[breakdown.rating]
     
     return breakdown
+
+
+# ============================================================
+# V3: Weighted Scoring Functions
+# ============================================================
+
+def calculate_score_v3(result: VerificationResult) -> "TrustScore":
+    """
+    V3: 使用加权评分器计算信任分数
+    
+    根据违规的严重程度和类别进行加权计算。
+    
+    Args:
+        result: 验证结果
+    
+    Returns:
+        TrustScore 对象
+    """
+    if not WEIGHTED_SCORER_AVAILABLE:
+        # Fallback to legacy
+        breakdown = calculate_score(result)
+        return type('TrustScore', (), {
+            'score': float(breakdown.total_score),
+            'grade': 'A' if breakdown.total_score >= 90 else 'B' if breakdown.total_score >= 80 else 'C' if breakdown.total_score >= 70 else 'D' if breakdown.total_score >= 60 else 'F',
+            'total_issues': len(result.violations),
+            'critical_issues': sum(1 for v in result.violations if v.severity == 'error'),
+            'warning_issues': sum(1 for v in result.violations if v.severity == 'warning'),
+            'info_issues': sum(1 for v in result.violations if v.severity == 'info'),
+            'breakdown': {},
+            'comparative_context': breakdown.rating_description,
+        })()
+    
+    scorer = WeightedTrustScorer()
+    
+    # Convert violations to dict format
+    violations_dicts = [
+        {
+            'category': v.category,
+            'severity': v.severity,
+            'message': v.message,
+        }
+        for v in result.violations
+    ]
+    
+    total_claims = (
+        result.stats.get('ecosystem_claims', 0) +
+        result.stats.get('path_claims', 0) +
+        result.stats.get('module_claims', 0)
+    )
+    
+    return scorer.calculate(violations_dicts, total_claims)

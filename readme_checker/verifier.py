@@ -5,6 +5,7 @@
 1. 生态系统验证：检查配置文件是否存在
 2. 路径验证：检查引用的文件是否存在
 3. 命令验证：检查代码块中的脚本是否存在
+4. 构建脚本验证：检查 npm run / make 等脚本是否在配置中定义
 """
 
 from dataclasses import dataclass, field
@@ -18,6 +19,8 @@ from readme_checker.extractor import (
     ModuleClaim,
     module_path_to_filesystem_paths,
 )
+from readme_checker.build.detector import BuildConfig, detect_build_systems
+from readme_checker.build.artifacts import ArtifactRegistry
 
 
 # ============================================================
@@ -272,3 +275,198 @@ def verify_all(
     result.stats["total_violations"] = len(result.violations)
     
     return result
+
+
+# ============================================================
+# Build Script Verification (V3)
+# ============================================================
+
+def verify_build_scripts(
+    commands: list[str],
+    build_configs: list[BuildConfig],
+) -> list[Violation]:
+    """
+    验证构建脚本引用 - 检查 npm run / make 等命令是否在配置中定义
+    
+    Args:
+        commands: 从 README 提取的命令列表
+        build_configs: 检测到的构建系统配置
+    
+    Returns:
+        违规记录列表
+    """
+    violations: list[Violation] = []
+    
+    # 收集所有已定义的脚本
+    defined_scripts: dict[str, str] = {}  # script_name -> build_system
+    for config in build_configs:
+        for script_name in config.scripts:
+            defined_scripts[script_name] = config.system_type
+    
+    # 检查每个命令
+    for cmd in commands:
+        script_name = _extract_script_name(cmd)
+        if script_name is None:
+            continue
+        
+        # 检查脚本是否已定义
+        if script_name not in defined_scripts:
+            # 确定是哪种构建系统的命令
+            build_system = _detect_build_system_from_command(cmd)
+            if build_system:
+                violations.append(Violation(
+                    category="build_script",
+                    severity="warning",
+                    message=f"Script '{script_name}' not found in {build_system} configuration",
+                    details={
+                        "command": cmd,
+                        "script_name": script_name,
+                        "build_system": build_system,
+                    },
+                ))
+    
+    return violations
+
+
+def _extract_script_name(command: str) -> str | None:
+    """
+    从命令中提取脚本名称
+    
+    支持:
+    - npm run <script>
+    - yarn <script>
+    - make <target>
+    - poetry run <script>
+    """
+    parts = command.strip().split()
+    if len(parts) < 2:
+        return None
+    
+    # npm run <script> / npm run-script <script>
+    if parts[0] == "npm" and len(parts) >= 3:
+        if parts[1] in ("run", "run-script"):
+            return parts[2]
+        # npm start, npm test, npm build are shortcuts
+        if parts[1] in ("start", "test", "build"):
+            return parts[1]
+    
+    # yarn <script> (yarn run is optional)
+    if parts[0] == "yarn":
+        if len(parts) >= 3 and parts[1] == "run":
+            return parts[2]
+        if len(parts) >= 2 and parts[1] not in ("install", "add", "remove", "upgrade"):
+            return parts[1]
+    
+    # make <target>
+    if parts[0] == "make" and len(parts) >= 2:
+        # Skip flags
+        for part in parts[1:]:
+            if not part.startswith("-"):
+                return part
+    
+    # poetry run <script>
+    if parts[0] == "poetry" and len(parts) >= 3 and parts[1] == "run":
+        return parts[2]
+    
+    return None
+
+
+def _detect_build_system_from_command(command: str) -> str | None:
+    """从命令检测构建系统类型"""
+    cmd_lower = command.lower()
+    
+    if cmd_lower.startswith("npm "):
+        return "npm"
+    if cmd_lower.startswith("yarn "):
+        return "npm"  # yarn uses package.json too
+    if cmd_lower.startswith("make "):
+        return "make"
+    if cmd_lower.startswith("poetry "):
+        return "python"
+    
+    return None
+
+
+def is_build_artifact(
+    path: str,
+    artifact_registry: ArtifactRegistry,
+) -> bool:
+    """
+    检查路径是否为构建产物
+    
+    Args:
+        path: 文件路径
+        artifact_registry: 构建产物注册表
+    
+    Returns:
+        是否为构建产物
+    """
+    return artifact_registry.is_build_artifact(path)
+
+
+def verify_paths_with_artifacts(
+    claims: list[PathClaim],
+    repo_path: Path,
+    artifact_registry: ArtifactRegistry,
+) -> list[Violation]:
+    """
+    验证路径声明 - 考虑构建产物
+    
+    如果文件不存在但是构建产物，则降低严重程度
+    
+    Args:
+        claims: 路径声明列表
+        repo_path: 仓库根目录路径
+        artifact_registry: 构建产物注册表
+    
+    Returns:
+        违规记录列表
+    """
+    violations: list[Violation] = []
+    
+    for claim in claims:
+        path = claim.path
+        if path.startswith("./"):
+            path = path[2:]
+        
+        full_path = repo_path / path
+        
+        if not full_path.exists():
+            # 检查是否为构建产物
+            if artifact_registry.is_build_artifact(path):
+                artifact_info = artifact_registry.get_artifact_info(path)
+                source = artifact_info.source_target if artifact_info else "build"
+                
+                violations.append(Violation(
+                    category="build_artifact",
+                    severity="info",
+                    message=f"Build artifact (not in repo): {claim.path} (generated by '{source}')",
+                    line_number=claim.line_number,
+                    details={
+                        "path": claim.path,
+                        "is_build_artifact": True,
+                        "source_target": source,
+                    },
+                ))
+            else:
+                # 普通文件缺失
+                if claim.claim_type == "image":
+                    msg = f"Image not found: {claim.path}"
+                elif claim.claim_type == "command":
+                    msg = f"Script not found: {claim.path}"
+                else:
+                    msg = f"File not found: {claim.path}"
+                
+                violations.append(Violation(
+                    category="path" if claim.claim_type != "command" else "command",
+                    severity="error" if claim.claim_type == "command" else "warning",
+                    message=msg,
+                    line_number=claim.line_number,
+                    details={
+                        "path": claim.path,
+                        "claim_type": claim.claim_type,
+                        "source_text": claim.source_text,
+                    },
+                ))
+    
+    return violations

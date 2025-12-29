@@ -4,6 +4,10 @@
 用于检测：
 1. 夸大描述（代码量少但描述夸张）
 2. TODO 陷阱（声称完成但有大量 TODO）
+
+V3 增强：
+- 智能 LOC 计数：排除 vendor/generated 代码
+- TODO 分类：按优先级分类 (TODO, FIXME, HACK, XXX)
 """
 
 import re
@@ -13,11 +17,31 @@ from typing import Optional
 
 from readme_checker.extractor import ExtractedClaims
 from readme_checker.verifier import Violation
-from readme_checker.gitignore import (
-    GitignoreRules,
-    parse_gitignore,
-    should_ignore,
-)
+from readme_checker.filters.pathspec_filter import PathspecFilter, DEFAULT_IGNORE_PATTERNS
+
+# V3: Import smart metrics
+try:
+    from readme_checker.metrics.loc import SmartLOCCounter, LOCResult
+    from readme_checker.metrics.todos import TodoAnalyzer, TodoSummary
+    SMART_METRICS_AVAILABLE = True
+except ImportError:
+    SMART_METRICS_AVAILABLE = False
+    SmartLOCCounter = None  # type: ignore
+    LOCResult = None  # type: ignore
+    TodoAnalyzer = None  # type: ignore
+    TodoSummary = None  # type: ignore
+
+# Legacy import for backward compatibility
+try:
+    from readme_checker.gitignore import (
+        GitignoreRules,
+        parse_gitignore,
+        should_ignore,
+    )
+except ImportError:
+    GitignoreRules = None  # type: ignore
+    parse_gitignore = None  # type: ignore
+    should_ignore = None  # type: ignore
 
 
 # ============================================================
@@ -165,22 +189,27 @@ def _count_file_loc(file_path: Path) -> tuple[int, list[TodoLocation]]:
     return loc, todos
 
 
-def analyze_codebase(repo_path: Path, gitignore_rules: Optional[GitignoreRules] = None) -> CodeStats:
+def analyze_codebase(
+    repo_path: Path,
+    gitignore_rules: Optional["GitignoreRules"] = None,
+    pathspec_filter: Optional[PathspecFilter] = None,
+) -> CodeStats:
     """
     分析代码库，统计 LOC 和 TODO
     
     Args:
         repo_path: 仓库根目录路径
-        gitignore_rules: Gitignore 规则集（可选，如果为 None 则自动解析）
+        gitignore_rules: Gitignore 规则集（可选，已弃用，使用 pathspec_filter）
+        pathspec_filter: Pathspec 过滤器（可选，如果为 None 则自动创建）
     
     Returns:
         CodeStats 对象，包含统计结果
     """
     stats = CodeStats()
     
-    # 如果没有提供规则，自动解析 .gitignore
-    if gitignore_rules is None:
-        gitignore_rules = parse_gitignore(repo_path)
+    # 优先使用 PathspecFilter（V3）
+    if pathspec_filter is None:
+        pathspec_filter = PathspecFilter(repo_path)
     
     # 遍历所有源文件
     for file_path in repo_path.rglob("*"):
@@ -188,8 +217,8 @@ def analyze_codebase(repo_path: Path, gitignore_rules: Optional[GitignoreRules] 
         if not file_path.is_file():
             continue
         
-        # 使用 gitignore 规则过滤文件
-        if should_ignore(file_path, gitignore_rules, repo_path):
+        # 使用 pathspec 过滤文件
+        if pathspec_filter.should_ignore(file_path):
             continue
         
         # 检查文件扩展名
@@ -280,3 +309,63 @@ def verify_todos(
         ))
     
     return violations
+
+
+# ============================================================
+# V3: Smart Metrics Functions
+# ============================================================
+
+def analyze_codebase_v3(repo_path: Path) -> "LOCResult":
+    """
+    V3: 使用智能 LOC 计数器分析代码库
+    
+    排除 vendor 代码、生成代码，提供语言分布。
+    
+    Args:
+        repo_path: 仓库根目录路径
+    
+    Returns:
+        LOCResult 对象
+    """
+    if not SMART_METRICS_AVAILABLE:
+        # Fallback to legacy
+        stats = analyze_codebase(repo_path)
+        return type('LOCResult', (), {
+            'total_loc': stats.total_loc,
+            'source_loc': stats.total_loc,
+            'test_loc': 0,
+            'file_count': stats.total_files,
+            'source_file_count': stats.total_files,
+            'language_breakdown': {},
+            'excluded_vendor_loc': 0,
+            'excluded_generated_loc': 0,
+        })()
+    
+    counter = SmartLOCCounter(repo_path)
+    return counter.count()
+
+
+def analyze_todos_v3(repo_path: Path) -> "TodoSummary":
+    """
+    V3: 使用 TODO 分析器分析代码库
+    
+    按优先级分类 TODO (TODO, FIXME, HACK, XXX)。
+    
+    Args:
+        repo_path: 仓库根目录路径
+    
+    Returns:
+        TodoSummary 对象
+    """
+    if not SMART_METRICS_AVAILABLE:
+        # Fallback to legacy
+        stats = analyze_codebase(repo_path)
+        return type('TodoSummary', (), {
+            'total_count': stats.todo_count,
+            'by_priority': {'TODO': stats.todo_count},
+            'items': [],
+            'weighted_score': 0.5,
+        })()
+    
+    analyzer = TodoAnalyzer(repo_path)
+    return analyzer.analyze()
