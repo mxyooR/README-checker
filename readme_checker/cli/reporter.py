@@ -18,9 +18,9 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from readme_checker.verifier import VerificationResult, Violation
-from readme_checker.scorer import ScoreBreakdown
-from readme_checker.analyzer import CodeStats
+from readme_checker.verification.verifier import VerificationResult, Violation
+from readme_checker.verification.scorer import ScoreBreakdown
+from readme_checker.verification.analyzer import CodeStats
 
 
 # ============================================================

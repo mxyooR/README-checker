@@ -19,15 +19,15 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from readme_checker.repo import load_repository, cleanup_repository, CloneConfig
-from readme_checker.resolver import resolve_analysis_context
-from readme_checker.parser import parse_readme
-from readme_checker.extractor import extract_claims
-from readme_checker.verifier import verify_all
-from readme_checker.analyzer import analyze_codebase, verify_hype, verify_todos
-from readme_checker.gitignore import parse_gitignore
-from readme_checker.scorer import calculate_score
-from readme_checker.reporter import generate_report
+from readme_checker.repo.loader import load_repository, cleanup_repository, CloneConfig
+from readme_checker.repo.resolver import resolve_analysis_context
+from readme_checker.parsing.markdown import parse_readme
+from readme_checker.parsing.extractor import extract_claims
+from readme_checker.verification.verifier import verify_all
+from readme_checker.verification.analyzer import analyze_codebase, verify_hype, verify_todos
+from readme_checker.repo.gitignore import parse_gitignore
+from readme_checker.verification.scorer import calculate_score
+from readme_checker.cli.reporter import generate_report
 
 # 创建 Typer 应用实例
 app = typer.Typer(
@@ -254,7 +254,7 @@ def _run_dynamic_verification(
     )
     from readme_checker.nlp import NLPIntentClassifier, IntentType
     from readme_checker.build.config_parser import parse_all_configs
-    from readme_checker.extraction.commands import extract_commands
+    from readme_checker.parsing.commands import extract_commands
     
     # Initialize components
     config = DynamicVerificationConfig(

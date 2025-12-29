@@ -48,7 +48,7 @@ all = [
 ]
 
 [project.scripts]
-checker = "readme_checker.cli:app"
+checker = "readme_checker.cli.app:app"
 
 [project.urls]
 Homepage = "https://github.com/readme-checker/readme-checker"

@@ -15,12 +15,12 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
-from readme_checker.parser import ParsedReadme, CodeBlock, Link
+from readme_checker.parsing.markdown import ParsedReadme, CodeBlock, Link
 
 # V3: Import semantic analysis and command extraction
 try:
-    from readme_checker.semantic.intent import classify_intent, Intent, ClassifiedInstruction
-    from readme_checker.extraction.commands import extract_commands, ExtractedCommand
+    from readme_checker.nlp.intent import classify_intent, Intent, ClassifiedInstruction
+    from readme_checker.parsing.commands import extract_commands, ExtractedCommand
     SEMANTIC_AVAILABLE = True
 except ImportError:
     SEMANTIC_AVAILABLE = False
@@ -80,7 +80,6 @@ COMPLETENESS_CLAIMS: list[str] = [
 ]
 
 # Python 模块调用正则表达式
-# 匹配: python -m module_name, python3 -m package.submodule
 MODULE_PATTERNS: list[re.Pattern] = [
     re.compile(r'python\s+-m\s+([a-zA-Z_][a-zA-Z0-9_\.]*)', re.IGNORECASE),
     re.compile(r'python3\s+-m\s+([a-zA-Z_][a-zA-Z0-9_\.]*)', re.IGNORECASE),
@@ -93,15 +92,7 @@ MODULE_PATTERNS: list[re.Pattern] = [
 
 @dataclass
 class EcosystemClaim:
-    """
-    生态系统声明 - README 中提到的构建工具
-    
-    Attributes:
-        tool: 工具名称（npm, pip, docker 等）
-        expected_files: 期望存在的配置文件列表
-        keyword: 匹配到的关键词
-        line_number: 关键词所在行号（如果可确定）
-    """
+    """生态系统声明 - README 中提到的构建工具"""
     tool: str
     expected_files: list[str]
     keyword: str
@@ -110,15 +101,7 @@ class EcosystemClaim:
 
 @dataclass
 class PathClaim:
-    """
-    路径声明 - README 中引用的文件路径
-    
-    Attributes:
-        path: 文件路径
-        line_number: 所在行号
-        claim_type: 声明类型（image, link, command）
-        source_text: 原始文本（用于错误报告）
-    """
+    """路径声明 - README 中引用的文件路径"""
     path: str
     line_number: int
     claim_type: str  # "image", "link", "command"
@@ -127,60 +110,30 @@ class PathClaim:
 
 @dataclass
 class HypeClaim:
-    """
-    夸大声明 - README 中的夸大词汇
-    
-    Attributes:
-        word: 匹配到的夸大词汇
-        line_number: 所在行号（如果可确定）
-    """
+    """夸大声明 - README 中的夸大词汇"""
     word: str
     line_number: Optional[int] = None
 
 
 @dataclass
 class CompletenessClaim:
-    """
-    完整性声明 - README 中声称项目已完成的词汇
-    
-    Attributes:
-        claim: 匹配到的完整性声明
-        line_number: 所在行号（如果可确定）
-    """
+    """完整性声明 - README 中声称项目已完成的词汇"""
     claim: str
     line_number: Optional[int] = None
 
 
 @dataclass
 class ModuleClaim:
-    """
-    Python 模块调用声明 - README 中使用 python -m 形式调用的模块
-    
-    Attributes:
-        module_path: 模块路径（如 "mypackage.submodule"）
-        python_version: Python 版本（"python" 或 "python3"）
-        line_number: 所在行号
-        source_text: 原始命令文本
-    """
+    """Python 模块调用声明"""
     module_path: str
-    python_version: str  # "python" or "python3"
+    python_version: str
     line_number: int
     source_text: str = ""
 
 
 @dataclass
 class ExtractedClaims:
-    """
-    提取的所有声明
-    
-    Attributes:
-        ecosystem_claims: 生态系统声明列表
-        path_claims: 路径声明列表
-        hype_claims: 夸大声明列表
-        completeness_claims: 完整性声明列表
-        module_claims: Python 模块调用声明列表
-        classified_commands: V3 - 带语义分类的命令列表
-    """
+    """提取的所有声明"""
     ecosystem_claims: list[EcosystemClaim] = field(default_factory=list)
     path_claims: list[PathClaim] = field(default_factory=list)
     hype_claims: list[HypeClaim] = field(default_factory=list)
@@ -194,18 +147,10 @@ class ExtractedClaims:
 # ============================================================
 
 def _extract_ecosystem_claims(text: str) -> list[EcosystemClaim]:
-    """
-    从文本中提取生态系统声明
-    
-    Args:
-        text: README 的纯文本内容
-    
-    Returns:
-        生态系统声明列表
-    """
+    """从文本中提取生态系统声明"""
     claims: list[EcosystemClaim] = []
     text_lower = text.lower()
-    found_tools: set[str] = set()  # 避免重复
+    found_tools: set[str] = set()
     
     for tool, keywords in ECOSYSTEM_KEYWORDS.items():
         for keyword in keywords:
@@ -216,33 +161,20 @@ def _extract_ecosystem_claims(text: str) -> list[EcosystemClaim]:
                     expected_files=ECOSYSTEM_RULES[tool],
                     keyword=keyword,
                 ))
-                break  # 每个工具只记录一次
+                break
     
     return claims
 
 
 def _extract_path_claims_from_links(links: list[Link]) -> list[PathClaim]:
-    """
-    从链接列表中提取路径声明
-    
-    只提取本地路径（以 ./ 或 ../ 开头，或不包含 :// 的相对路径）
-    
-    Args:
-        links: 解析出的链接列表
-    
-    Returns:
-        路径声明列表
-    """
+    """从链接列表中提取路径声明"""
     claims: list[PathClaim] = []
     
     for link in links:
         path = link.path
-        
-        # 跳过外部链接（http://, https://, mailto: 等）
         if "://" in path or path.startswith("mailto:") or path.startswith("#"):
             continue
         
-        # 本地路径
         claim_type = "image" if link.is_image else "link"
         claims.append(PathClaim(
             path=path,
@@ -255,31 +187,18 @@ def _extract_path_claims_from_links(links: list[Link]) -> list[PathClaim]:
 
 
 def _extract_path_claims_from_code_blocks(code_blocks: list[CodeBlock]) -> list[PathClaim]:
-    """
-    从代码块中提取脚本路径声明
-    
-    识别 bash/shell 代码块中的脚本调用命令
-    
-    Args:
-        code_blocks: 解析出的代码块列表
-    
-    Returns:
-        路径声明列表
-    """
+    """从代码块中提取脚本路径声明"""
     claims: list[PathClaim] = []
     
-    # 匹配脚本调用的正则表达式
-    # 匹配: python script.py, bash ./script.sh, node app.js 等
     script_patterns = [
-        r'python[3]?\s+([^\s|>&;]+\.py)',  # python script.py
-        r'bash\s+([^\s|>&;]+)',             # bash script.sh
-        r'sh\s+([^\s|>&;]+)',               # sh script.sh
-        r'\./([^\s|>&;]+)',                 # ./script.sh
-        r'node\s+([^\s|>&;]+\.js)',         # node app.js
+        r'python[3]?\s+([^\s|>&;]+\.py)',
+        r'bash\s+([^\s|>&;]+)',
+        r'sh\s+([^\s|>&;]+)',
+        r'\./([^\s|>&;]+)',
+        r'node\s+([^\s|>&;]+\.js)',
     ]
     
     for block in code_blocks:
-        # 只处理 bash/shell 相关的代码块
         lang = block.language.lower()
         if lang not in ("bash", "shell", "sh", "zsh", "console", ""):
             continue
@@ -292,7 +211,6 @@ def _extract_path_claims_from_code_blocks(code_blocks: list[CodeBlock]) -> list[
             for pattern in script_patterns:
                 matches = re.findall(pattern, line)
                 for match in matches:
-                    # 清理路径
                     path = match.strip()
                     if path:
                         claims.append(PathClaim(
@@ -306,15 +224,7 @@ def _extract_path_claims_from_code_blocks(code_blocks: list[CodeBlock]) -> list[
 
 
 def _extract_hype_claims(text: str) -> list[HypeClaim]:
-    """
-    从文本中提取夸大声明
-    
-    Args:
-        text: README 的纯文本内容
-    
-    Returns:
-        夸大声明列表
-    """
+    """从文本中提取夸大声明"""
     claims: list[HypeClaim] = []
     text_lower = text.lower()
     
@@ -326,15 +236,7 @@ def _extract_hype_claims(text: str) -> list[HypeClaim]:
 
 
 def _extract_completeness_claims(text: str) -> list[CompletenessClaim]:
-    """
-    从文本中提取完整性声明
-    
-    Args:
-        text: README 的纯文本内容
-    
-    Returns:
-        完整性声明列表
-    """
+    """从文本中提取完整性声明"""
     claims: list[CompletenessClaim] = []
     text_lower = text.lower()
     
@@ -346,21 +248,10 @@ def _extract_completeness_claims(text: str) -> list[CompletenessClaim]:
 
 
 def _extract_module_claims(code_blocks: list[CodeBlock]) -> list[ModuleClaim]:
-    """
-    从代码块中提取 Python 模块调用声明
-    
-    识别 bash/shell 代码块中的 python -m 和 python3 -m 命令
-    
-    Args:
-        code_blocks: 解析出的代码块列表
-    
-    Returns:
-        模块调用声明列表
-    """
+    """从代码块中提取 Python 模块调用声明"""
     claims: list[ModuleClaim] = []
     
     for block in code_blocks:
-        # 只处理 bash/shell 相关的代码块
         lang = block.language.lower()
         if lang not in ("bash", "shell", "sh", "zsh", "console", ""):
             continue
@@ -374,9 +265,7 @@ def _extract_module_claims(code_blocks: list[CodeBlock]) -> list[ModuleClaim]:
                 match = pattern.search(line_stripped)
                 if match:
                     module_path = match.group(1)
-                    # 判断是 python 还是 python3
                     python_version = "python3" if "python3" in line_stripped.lower() else "python"
-                    
                     claims.append(ModuleClaim(
                         module_path=module_path,
                         python_version=python_version,
@@ -388,40 +277,18 @@ def _extract_module_claims(code_blocks: list[CodeBlock]) -> list[ModuleClaim]:
 
 
 def module_path_to_filesystem_paths(module_path: str) -> list[str]:
-    """
-    将 Python 模块路径转换为可能的文件系统路径
-    
-    例如:
-    - "mymodule" -> ["mymodule.py", "mymodule/__init__.py"]
-    - "package.submodule" -> ["package/submodule.py", "package/submodule/__init__.py"]
-    
-    Args:
-        module_path: Python 模块路径（如 "mypackage.submodule"）
-    
-    Returns:
-        可能的文件系统路径列表
-    """
-    # 将点号转换为目录分隔符
+    """将 Python 模块路径转换为可能的文件系统路径"""
     path_parts = module_path.split('.')
     base_path = '/'.join(path_parts)
     
     return [
-        f"{base_path}.py",              # 作为单个 .py 文件
-        f"{base_path}/__init__.py",     # 作为包目录
+        f"{base_path}.py",
+        f"{base_path}/__init__.py",
     ]
 
 
 def extract_claims(parsed: ParsedReadme) -> ExtractedClaims:
-    """
-    从解析后的 README 中提取所有可验证的声明
-    
-    Args:
-        parsed: 解析后的 README 对象
-    
-    Returns:
-        ExtractedClaims 对象，包含所有提取的声明
-    """
-    # 合并文本内容：纯文本 + 原始内容（确保不遗漏）
+    """从解析后的 README 中提取所有可验证的声明"""
     full_text = parsed.text_content + " " + parsed.raw_content
     
     claims = ExtractedClaims(
@@ -435,7 +302,6 @@ def extract_claims(parsed: ParsedReadme) -> ExtractedClaims:
         module_claims=_extract_module_claims(parsed.code_blocks),
     )
     
-    # V3: Add semantic classification if available
     if SEMANTIC_AVAILABLE:
         claims.classified_commands = _extract_classified_commands(
             parsed.code_blocks, 
@@ -449,19 +315,7 @@ def _extract_classified_commands(
     code_blocks: list[CodeBlock],
     raw_content: str,
 ) -> list["ClassifiedInstruction"]:
-    """
-    V3: 提取带语义分类的命令
-    
-    使用 shlex 进行健壮的命令解析，并使用意图分类器
-    判断命令是肯定指令、否定指令还是条件指令。
-    
-    Args:
-        code_blocks: 代码块列表
-        raw_content: README 原始内容（用于获取上下文）
-    
-    Returns:
-        分类后的命令列表
-    """
+    """V3: 提取带语义分类的命令"""
     if not SEMANTIC_AVAILABLE:
         return []
     
@@ -472,42 +326,24 @@ def _extract_classified_commands(
         if lang not in ("bash", "shell", "sh", "zsh", "console", ""):
             continue
         
-        # 使用 V3 命令提取器
         commands = extract_commands(block.content, lang)
         
         for cmd in commands:
-            # 获取命令周围的上下文
             context = _get_command_context(raw_content, cmd.raw_text, block.line_number)
-            
-            # 分类意图
             instruction = classify_intent(
                 text=context,
                 command=cmd.raw_text,
                 line_number=block.line_number + cmd.line_number,
             )
-            
             classified.append(instruction)
     
     return classified
 
 
 def _get_command_context(raw_content: str, command: str, line_number: int) -> str:
-    """
-    获取命令周围的上下文文本
-    
-    Args:
-        raw_content: README 原始内容
-        command: 命令文本
-        line_number: 命令所在行号
-    
-    Returns:
-        包含命令的上下文段落
-    """
+    """获取命令周围的上下文文本"""
     lines = raw_content.split('\n')
-    
-    # 获取命令前后各 3 行作为上下文
     start = max(0, line_number - 4)
     end = min(len(lines), line_number + 3)
-    
     context_lines = lines[start:end]
     return '\n'.join(context_lines)

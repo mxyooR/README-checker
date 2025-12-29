@@ -121,7 +121,7 @@ class CloneAuthError(CloneError):
 
 
 @dataclass
-class RepoContext:
+class RepositoryContext:
     """
     仓库上下文 - 包含仓库路径和元信息
     
@@ -137,6 +137,10 @@ class RepoContext:
     readme_content: str = ""
     is_temporary: bool = False
     source_url: Optional[str] = None
+
+
+# 向后兼容别名
+RepoContext = RepositoryContext
 
 
 # ============================================================
@@ -288,7 +292,7 @@ def _clone_repository(url: str, config: Optional[CloneConfig] = None) -> Path:
         raise ValueError(error_msg)
 
 
-def load_repository(target: str, clone_config: Optional[CloneConfig] = None) -> RepoContext:
+def load_repository(target: str, clone_config: Optional[CloneConfig] = None) -> RepositoryContext:
     """
     加载仓库（本地路径或 GitHub URL）
     
@@ -297,7 +301,7 @@ def load_repository(target: str, clone_config: Optional[CloneConfig] = None) -> 
         clone_config: 克隆配置（可选，仅用于远程仓库）
     
     Returns:
-        RepoContext 对象
+        RepositoryContext 对象
     
     Raises:
         ValueError: 路径无效或仓库加载失败
@@ -333,7 +337,7 @@ def load_repository(target: str, clone_config: Optional[CloneConfig] = None) -> 
             except Exception:
                 readme_content = ""
     
-    return RepoContext(
+    return RepositoryContext(
         path=repo_path,
         readme_path=readme_path,
         readme_content=readme_content,
@@ -342,7 +346,7 @@ def load_repository(target: str, clone_config: Optional[CloneConfig] = None) -> 
     )
 
 
-def cleanup_repository(ctx: RepoContext) -> None:
+def cleanup_repository(ctx: RepositoryContext) -> None:
     """
     清理临时仓库
     
