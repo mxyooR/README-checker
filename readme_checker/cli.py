@@ -9,12 +9,15 @@ CLI 入口模块 - 使用 Typer 构建命令行界面
 5. 分析代码（LOC、TODO）
 6. 计算评分
 7. 生成报告
+8. [V4] 动态命令验证（可选）
 """
 
+from pathlib import Path
 from typing import Optional
 
 import typer
 from rich.console import Console
+from rich.table import Table
 
 from readme_checker.repo import load_repository, cleanup_repository, CloneConfig
 from readme_checker.resolver import resolve_analysis_context
@@ -60,6 +63,27 @@ def check(
         "--verbose",
         "-v",
         help="Show detailed output",
+    ),
+    dynamic: bool = typer.Option(
+        False,
+        "--dynamic",
+        "-d",
+        help="[V4] Enable dynamic command verification (actually run commands)",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="[V4] Syntax validation only, no actual execution (requires --dynamic)",
+    ),
+    cmd_timeout: int = typer.Option(
+        300,
+        "--cmd-timeout",
+        help="[V4] Command execution timeout in seconds (requires --dynamic)",
+    ),
+    allow_network: bool = typer.Option(
+        False,
+        "--allow-network",
+        help="[V4] Allow network access during command execution (requires --dynamic)",
     ),
 ) -> None:
     """
@@ -158,8 +182,31 @@ def check(
         # 8. 计算评分
         score = calculate_score(result)
         
-        # 9. 生成报告
+        # 9. [V4] 动态命令验证（可选）
+        dynamic_report = None
+        if dynamic:
+            if verbose:
+                console.print("[dim]Running dynamic verification...[/dim]")
+            
+            dynamic_report = _run_dynamic_verification(
+                analysis_ctx.analysis_root,
+                parsed,
+                claims,
+                dry_run=dry_run,
+                cmd_timeout=cmd_timeout,
+                allow_network=allow_network,
+                verbose=verbose,
+            )
+            
+            if dynamic_report and dynamic_report.has_failures:
+                console.print(f"[yellow]Dynamic verification found {dynamic_report.failure_count} issue(s)[/yellow]")
+        
+        # 10. 生成报告
         generate_report(target, result, score, stats, console)
+        
+        # 显示动态验证结果
+        if dynamic_report:
+            _display_dynamic_report(dynamic_report, console, verbose)
         
         # 根据评分设置退出码
         if score.rating == "liar":
@@ -185,3 +232,129 @@ def version() -> None:
 
 if __name__ == "__main__":
     app()
+
+
+def _run_dynamic_verification(
+    repo_path: Path,
+    parsed,
+    claims,
+    dry_run: bool = False,
+    cmd_timeout: int = 300,
+    allow_network: bool = False,
+    verbose: bool = False,
+):
+    """Run dynamic verification on extracted commands."""
+    from readme_checker.dynamic import (
+        DynamicVerifier,
+        DynamicVerificationConfig,
+        FullVerificationReport,
+        DynamicVerificationReport,
+        IntentClassificationReport,
+        BuildArtifactReport,
+    )
+    from readme_checker.nlp import NLPIntentClassifier, IntentType
+    from readme_checker.build.config_parser import parse_all_configs
+    from readme_checker.extraction.commands import extract_commands
+    
+    # Initialize components
+    config = DynamicVerificationConfig(
+        timeout=cmd_timeout,
+        dry_run=dry_run,
+        allow_network=allow_network,
+    )
+    verifier = DynamicVerifier(config)
+    classifier = NLPIntentClassifier()
+    
+    report = FullVerificationReport()
+    
+    # 1. Parse build configs
+    build_configs = parse_all_configs(repo_path)
+    for cfg in build_configs:
+        report.artifact_results.append(BuildArtifactReport.from_parsed_config(cfg))
+    
+    # 2. Extract and classify commands from code blocks
+    for block in parsed.code_blocks:
+        commands = extract_commands(block.content, block.language or "bash")
+        
+        for cmd in commands:
+            # Get surrounding text for context
+            context = block.content
+            
+            # Classify intent
+            classified = classifier.classify(context, cmd.raw_text)
+            report.intent_results.append(
+                IntentClassificationReport.from_classified_command(classified)
+            )
+            
+            # Only verify REQUIRED commands (skip OPTIONAL, DEPRECATED, etc.)
+            if classified.intent == IntentType.REQUIRED:
+                if verbose:
+                    console.print(f"[dim]  Verifying: {cmd.raw_text[:50]}...[/dim]")
+                
+                result = verifier.verify_command(cmd.raw_text, repo_path)
+                report.dynamic_results.append(
+                    DynamicVerificationReport.from_execution_result(result)
+                )
+    
+    return report
+
+
+def _display_dynamic_report(report, console: Console, verbose: bool = False):
+    """Display dynamic verification report."""
+    from readme_checker.dynamic import FailureCategory
+    
+    console.print()
+    console.print("[bold]Dynamic Verification Results[/bold]")
+    console.print()
+    
+    # Show failures
+    failures = [r for r in report.dynamic_results if r.category != FailureCategory.NONE]
+    if failures:
+        table = Table(title="Command Execution Results")
+        table.add_column("Command", style="cyan", max_width=40)
+        table.add_column("Status", style="red")
+        table.add_column("Exit Code")
+        table.add_column("Duration")
+        
+        for f in failures:
+            status_style = {
+                FailureCategory.DYNAMIC_FAILURE: "red",
+                FailureCategory.TIMEOUT_FAILURE: "yellow",
+                FailureCategory.SECURITY_BLOCKED: "magenta",
+                FailureCategory.NETWORK_FAILURE: "blue",
+            }.get(f.category, "red")
+            
+            table.add_row(
+                f.command[:40] + "..." if len(f.command) > 40 else f.command,
+                f"[{status_style}]{f.category.value}[/{status_style}]",
+                str(f.exit_code) if f.exit_code is not None else "-",
+                f"{f.duration_ms}ms",
+            )
+        
+        console.print(table)
+        
+        # Show stderr for failures if verbose
+        if verbose:
+            for f in failures:
+                if f.stderr:
+                    console.print(f"\n[dim]stderr for '{f.command[:30]}...':[/dim]")
+                    console.print(f"[red]{f.stderr[:500]}[/red]")
+    else:
+        console.print("[green]✓ All commands executed successfully[/green]")
+    
+    # Show commands needing review
+    needs_review = [r for r in report.intent_results if r.needs_review]
+    if needs_review:
+        console.print()
+        console.print(f"[yellow]⚠ {len(needs_review)} command(s) need manual review (low confidence)[/yellow]")
+        if verbose:
+            for r in needs_review:
+                console.print(f"  [dim]- {r.command} (confidence: {r.confidence:.2f})[/dim]")
+    
+    # Show build artifact detection
+    if report.artifact_results and verbose:
+        console.print()
+        console.print("[bold]Build Artifact Detection[/bold]")
+        for a in report.artifact_results:
+            source = "default" if a.is_default else "config"
+            console.print(f"  [dim]{a.config_file}: {', '.join(a.output_paths)} ({source})[/dim]")
