@@ -31,12 +31,10 @@ README-Checker 帮你在用户发现之前捕获这些问题。
 ## 安装
 
 ```bash
-pip install readme-checker
-```
+# 从 GitHub 安装
+pip install git+https://github.com/user/readme-checker.git
 
-或从源码安装：
-
-```bash
+# 或克隆后本地安装
 git clone https://github.com/user/readme-checker.git
 cd readme-checker
 pip install -e .
@@ -204,7 +202,7 @@ Issues Found:
 ```yaml
 - name: Check README
   run: |
-    pip install readme-checker
+    pip install git+https://github.com/user/readme-checker.git
     checker check --format json > report.json
 ```
 

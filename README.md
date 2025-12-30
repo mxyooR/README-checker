@@ -31,12 +31,10 @@ README-Checker catches these issues before your users do.
 ## Installation
 
 ```bash
-pip install readme-checker
-```
+# Install from GitHub
+pip install git+https://github.com/user/readme-checker.git
 
-Or install from source:
-
-```bash
+# Or clone and install locally
 git clone https://github.com/user/readme-checker.git
 cd readme-checker
 pip install -e .
@@ -204,7 +202,7 @@ Issues Found:
 ```yaml
 - name: Check README
   run: |
-    pip install readme-checker
+    pip install git+https://github.com/user/readme-checker.git
     checker check --format json > report.json
 ```
 
