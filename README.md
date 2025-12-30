@@ -30,6 +30,16 @@ README-Checker catches these issues before your users do.
 
 ## Installation
 
+### Pre-built Binary (No Python Required)
+
+Download from [Releases](https://github.com/user/readme-checker/releases):
+
+| Platform | File | Size |
+|----------|------|------|
+| Windows | `checker.exe` | ~10 MB |
+
+### From Source
+
 ```bash
 # Install from GitHub
 pip install git+https://github.com/user/readme-checker.git
@@ -42,7 +52,7 @@ pip install -e .
 
 ### Requirements
 
-- Python 3.10+
+- Python 3.10+ (source installation only)
 
 ## Quick Start
 

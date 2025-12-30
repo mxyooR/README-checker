@@ -30,6 +30,16 @@ README-Checker 帮你在用户发现之前捕获这些问题。
 
 ## 安装
 
+### 预编译版本（无需 Python）
+
+从 [Releases](https://github.com/user/readme-checker/releases) 下载：
+
+| 平台 | 文件 | 大小 |
+|------|------|------|
+| Windows | `checker.exe` | ~10 MB |
+
+### 从源码安装
+
 ```bash
 # 从 GitHub 安装
 pip install git+https://github.com/user/readme-checker.git
@@ -42,7 +52,7 @@ pip install -e .
 
 ### 环境要求
 
-- Python 3.10+
+- Python 3.10+（仅源码安装需要）
 
 ## 快速开始
 
