@@ -135,6 +135,8 @@ checker check .                  # 同上
 checker check ./my-project       # 检查指定路径
 checker check -v                 # 详细输出
 checker check -f json            # JSON 输出
+checker check -i version         # 忽略版本检查
+checker check -i env-vars -i license  # 忽略多项检查
 checker check --repo-url "github.com/user/repo"  # 检测绝对 URL
 ```
 
@@ -143,7 +145,22 @@ checker check --repo-url "github.com/user/repo"  # 检测绝对 URL
 | `PATH` | 项目路径（默认：`.`） |
 | `-v, --verbose` | 显示详细输出，包括扫描的文件 |
 | `-f, --format` | 输出格式：`rich`（默认）或 `json` |
+| `-i, --ignore` | 忽略特定检查（可多次使用） |
 | `--repo-url` | 用于检测绝对 URL 的仓库 URL 模式 |
+
+#### 忽略选项
+
+使用 `-i` 或 `--ignore` 跳过特定检查：
+
+| 值 | 说明 |
+|----|------|
+| `links` | 跳过链接验证 |
+| `code-blocks` | 跳过代码块验证 |
+| `env-vars` | 跳过环境变量检查 |
+| `deps` | 跳过系统依赖检查 |
+| `version` | 跳过版本一致性检查 |
+| `license` | 跳过许可证一致性检查 |
+| `commands` | 跳过命令验证 |
 
 ### `checker version`
 
@@ -204,13 +221,21 @@ readme_checker/
 │   └── app.py     # 主要 CLI 命令
 ├── core/          # 核心功能
 │   ├── parser.py  # Markdown 解析
-│   ├── scanner.py # 代码扫描（AST + 正则）
+│   ├── scanner/   # 代码扫描（模块化）
+│   │   ├── models.py      # 数据类
+│   │   ├── patterns.py    # 正则模式
+│   │   ├── python_ast.py  # Python AST 解析
+│   │   ├── js_ast.py      # JavaScript AST 解析
+│   │   ├── dotenv.py      # .env 文件解析
+│   │   └── core.py        # 主扫描函数
 │   └── validator.py # 验证逻辑
 ├── plugins/       # 语言插件
 │   ├── python.py  # Python 生态
 │   ├── nodejs.py  # Node.js 生态
 │   ├── golang.py  # Go 生态
-│   └── java.py    # Java 生态
+│   ├── java.py    # Java 生态
+│   ├── rust.py    # Rust 生态
+│   └── cpp.py     # C/C++ 生态
 └── reporters/     # 输出格式化
     ├── rich_reporter.py  # Rich 终端输出
     └── json_reporter.py  # JSON 输出

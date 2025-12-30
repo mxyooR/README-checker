@@ -135,6 +135,8 @@ checker check .                  # Same as above
 checker check ./my-project       # Check specific path
 checker check -v                 # Verbose output
 checker check -f json            # JSON output
+checker check -i version         # Ignore version checks
+checker check -i env-vars -i license  # Ignore multiple checks
 checker check --repo-url "github.com/user/repo"  # Detect absolute URLs
 ```
 
@@ -143,7 +145,22 @@ checker check --repo-url "github.com/user/repo"  # Detect absolute URLs
 | `PATH` | Path to project (default: `.`) |
 | `-v, --verbose` | Show detailed output including scanned files |
 | `-f, --format` | Output format: `rich` (default) or `json` |
+| `-i, --ignore` | Ignore specific checks (can be used multiple times) |
 | `--repo-url` | Repository URL pattern for absolute URL detection |
+
+#### Ignore Options
+
+Use `-i` or `--ignore` to skip specific checks:
+
+| Value | Description |
+|-------|-------------|
+| `links` | Skip link validation |
+| `code-blocks` | Skip code block validation |
+| `env-vars` | Skip environment variable checks |
+| `deps` | Skip system dependency checks |
+| `version` | Skip version consistency checks |
+| `license` | Skip license consistency checks |
+| `commands` | Skip command verification |
 
 ### `checker version`
 
@@ -204,13 +221,21 @@ readme_checker/
 │   └── app.py     # Main CLI commands
 ├── core/          # Core functionality
 │   ├── parser.py  # Markdown parsing
-│   ├── scanner.py # Code scanning (AST + regex)
+│   ├── scanner/   # Code scanning (modular)
+│   │   ├── models.py      # Data classes
+│   │   ├── patterns.py    # Regex patterns
+│   │   ├── python_ast.py  # Python AST parsing
+│   │   ├── js_ast.py      # JavaScript AST parsing
+│   │   ├── dotenv.py      # .env file parsing
+│   │   └── core.py        # Main scan function
 │   └── validator.py # Validation logic
 ├── plugins/       # Language plugins
 │   ├── python.py  # Python ecosystem
 │   ├── nodejs.py  # Node.js ecosystem
 │   ├── golang.py  # Go ecosystem
-│   └── java.py    # Java ecosystem
+│   ├── java.py    # Java ecosystem
+│   ├── rust.py    # Rust ecosystem
+│   └── cpp.py     # C/C++ ecosystem
 └── reporters/     # Output formatters
     ├── rich_reporter.py  # Rich terminal output
     └── json_reporter.py  # JSON output
