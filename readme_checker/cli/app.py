@@ -26,6 +26,8 @@ from readme_checker.plugins.python import PythonPlugin
 from readme_checker.plugins.nodejs import NodeJsPlugin
 from readme_checker.plugins.golang import GoPlugin
 from readme_checker.plugins.java import JavaPlugin
+from readme_checker.plugins.cpp import CppPlugin
+from readme_checker.plugins.rust import RustPlugin
 from readme_checker.reporters import RichReporter, JsonReporter
 
 # 创建 Typer 应用实例
@@ -48,8 +50,12 @@ def detect_project_type(repo_path: Path) -> str | None:
         return "nodejs"
     if (repo_path / "go.mod").exists():
         return "go"
+    if (repo_path / "Cargo.toml").exists():
+        return "rust"
     if (repo_path / "pom.xml").exists() or (repo_path / "build.gradle").exists() or (repo_path / "build.gradle.kts").exists():
         return "java"
+    if (repo_path / "CMakeLists.txt").exists() or (repo_path / "Makefile").exists() or (repo_path / "meson.build").exists():
+        return "cpp"
     return None
 
 
@@ -63,6 +69,10 @@ def get_plugin(project_type: str | None):
         return GoPlugin()
     if project_type == "java":
         return JavaPlugin()
+    if project_type == "rust":
+        return RustPlugin()
+    if project_type == "cpp":
+        return CppPlugin()
     return None
 
 
@@ -116,8 +126,9 @@ def extract_commands_from_readme(content: str) -> list[tuple[str, int]]:
             if any(line.startswith(cmd) for cmd in [
                 'npm ', 'yarn ', 'pnpm ', 'npx ',
                 'python ', 'python3 ', 'pip ', 'poetry ', 'pipenv ',
-                'go ', 'cargo ', 'rustc ',
-                'make ', 'cmake ',
+                'go ', 'cargo ', 'rustc ', 'rustup ',  # Go & Rust
+                'make ', 'cmake ', 'ninja ', 'meson ',  # C/C++
+                'gcc ', 'g++ ', 'clang ', 'clang++ ',  # Compilers
                 'docker ', 'kubectl ',
                 'mvn ', './mvnw ', 'gradle ', './gradlew ',  # Java
             ]):

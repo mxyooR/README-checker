@@ -119,9 +119,9 @@ checker -V
 | Python | ✅ 完整 | ✅ AST | ✅ pip, poetry |
 | JavaScript/TypeScript | ✅ 完整 | ✅ esprima | ✅ npm, yarn |
 | Go | ✅ 正则 | ❌ | ✅ go 命令 |
+| Rust | ✅ 正则 | ❌ | ✅ cargo, rustc |
 | Java | ✅ 正则 | ❌ | ✅ mvn, gradle |
-| C/C++ | ✅ 正则 | ❌ | ❌ |
-| Rust | ✅ 正则 | ❌ | ❌ |
+| C/C++ | ✅ 正则 | ❌ | ✅ cmake, make |
 
 ## 命令参考
 

@@ -119,9 +119,9 @@ Detects system tool calls in code (subprocess, exec, etc.) and warns if not docu
 | Python | ✅ Full | ✅ AST | ✅ pip, poetry |
 | JavaScript/TypeScript | ✅ Full | ✅ esprima | ✅ npm, yarn |
 | Go | ✅ Regex | ❌ | ✅ go commands |
+| Rust | ✅ Regex | ❌ | ✅ cargo, rustc |
 | Java | ✅ Regex | ❌ | ✅ mvn, gradle |
-| C/C++ | ✅ Regex | ❌ | ❌ |
-| Rust | ✅ Regex | ❌ | ❌ |
+| C/C++ | ✅ Regex | ❌ | ✅ cmake, make |
 
 ## CLI Reference
 
