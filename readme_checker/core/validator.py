@@ -592,7 +592,7 @@ class Validator:
         Args:
             env_vars: 代码中使用的环境变量列表
             readme_content: README 内容
-            env_example_path: .env.example 文件路径
+            env_example_path: .env.example 文件路径（已弃用，使用 repo_path 自动扫描）
             readme_path: README 文件路径
         
         Returns:
@@ -603,7 +603,12 @@ class Validator:
         # 从 README 中提取提到的环境变量
         documented_vars = self._extract_env_vars_from_readme(readme_content)
         
-        # 从 .env.example 中提取环境变量
+        # 从 .env.example 等文件中提取环境变量（使用新的扫描器）
+        from readme_checker.core.scanner import get_documented_env_var_names
+        dotenv_vars = get_documented_env_var_names(self.repo_path)
+        documented_vars.update(dotenv_vars)
+        
+        # 兼容旧的 env_example_path 参数
         if env_example_path and env_example_path.exists():
             try:
                 env_content = env_example_path.read_text(encoding='utf-8')

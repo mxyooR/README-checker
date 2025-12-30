@@ -600,6 +600,310 @@ def extract_config_library_env_vars(content: str, file_path: str) -> list[EnvVar
     return detector.env_vars
 
 
+# ============================================================================
+# JS/TS AST 环境变量提取
+# ============================================================================
+
+# 尝试导入 esprima，如果失败则禁用 JS AST
+try:
+    import esprima
+    ESPRIMA_AVAILABLE = True
+except ImportError:
+    ESPRIMA_AVAILABLE = False
+    logger.warning("esprima not installed, JS AST parsing disabled")
+
+
+class JSVariableTracker:
+    """
+    JS 变量追踪器 - 追踪字符串变量赋值用于解析间接引用
+    
+    支持追踪：
+    - const key = "API_KEY"
+    - let key = "API_KEY"
+    - var key = "API_KEY"
+    - const keys = ["A", "B", "C"]
+    """
+    
+    def __init__(self):
+        self.string_vars: dict[str, str] = {}  # 变量名 -> 字符串值
+        self.list_vars: dict[str, list[str]] = {}  # 变量名 -> 字符串列表
+    
+    def track_declaration(self, node: dict) -> None:
+        """追踪变量声明"""
+        if node.get("type") != "VariableDeclaration":
+            return
+        
+        for decl in node.get("declarations", []):
+            if decl.get("type") != "VariableDeclarator":
+                continue
+            
+            id_node = decl.get("id", {})
+            init_node = decl.get("init")
+            
+            if id_node.get("type") != "Identifier" or not init_node:
+                continue
+            
+            var_name = id_node.get("name")
+            
+            # 字符串字面量
+            if init_node.get("type") == "Literal" and isinstance(init_node.get("value"), str):
+                self.string_vars[var_name] = init_node["value"]
+            
+            # 模板字符串（无表达式）
+            elif init_node.get("type") == "TemplateLiteral":
+                quasis = init_node.get("quasis", [])
+                if len(quasis) == 1 and not init_node.get("expressions"):
+                    self.string_vars[var_name] = quasis[0].get("value", {}).get("raw", "")
+            
+            # 数组字面量
+            elif init_node.get("type") == "ArrayExpression":
+                strings = []
+                for elem in init_node.get("elements", []):
+                    if elem and elem.get("type") == "Literal" and isinstance(elem.get("value"), str):
+                        strings.append(elem["value"])
+                if strings:
+                    self.list_vars[var_name] = strings
+    
+    def resolve_name(self, name: str) -> Optional[str]:
+        """解析变量名到字符串值"""
+        return self.string_vars.get(name)
+    
+    def resolve_list(self, name: str) -> Optional[list[str]]:
+        """解析变量名到字符串列表"""
+        return self.list_vars.get(name)
+
+
+class JSEnvVarExtractor:
+    """
+    JS/TS 环境变量提取器
+    
+    使用 esprima 解析 JavaScript 代码，提取环境变量引用，支持：
+    - 直接引用: process.env.KEY
+    - 下标引用: process.env["KEY"]
+    - 间接引用: const key = "API_KEY"; process.env[key]
+    """
+    
+    def __init__(self, file_path: str):
+        self.file_path = file_path
+        self.env_vars: list[EnvVarUsage] = []
+        self.unresolved: list[UnresolvedRef] = []
+        self.var_tracker = JSVariableTracker()
+        self._current_context: Optional[str] = None
+    
+    def extract(self, content: str) -> tuple[list[EnvVarUsage], list[UnresolvedRef]]:
+        """
+        解析 JS 代码提取环境变量
+        
+        Args:
+            content: JS 代码内容
+        
+        Returns:
+            (环境变量列表, 未解析引用列表)
+        """
+        if not ESPRIMA_AVAILABLE:
+            return [], []
+        
+        try:
+            # 使用 tolerant 模式允许部分语法错误
+            ast_tree = esprima.parseScript(content, {"tolerant": True, "loc": True})
+            self._collect_variables(ast_tree.toDict())
+            self._visit(ast_tree.toDict())
+            return self.env_vars, self.unresolved
+        except Exception as e:
+            logger.debug(f"JS AST parsing failed for {self.file_path}: {e}")
+            return [], []
+    
+    def _collect_variables(self, node: dict) -> None:
+        """第一遍：收集所有变量声明"""
+        if not isinstance(node, dict):
+            return
+        
+        if node.get("type") == "VariableDeclaration":
+            self.var_tracker.track_declaration(node)
+        
+        # 递归遍历子节点
+        for key, value in node.items():
+            if isinstance(value, dict):
+                self._collect_variables(value)
+            elif isinstance(value, list):
+                for item in value:
+                    if isinstance(item, dict):
+                        self._collect_variables(item)
+    
+    def _visit(self, node: dict) -> None:
+        """第二遍：查找 process.env 访问"""
+        if not isinstance(node, dict):
+            return
+        
+        node_type = node.get("type")
+        
+        # 追踪函数上下文
+        if node_type in ("FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression"):
+            old_context = self._current_context
+            id_node = node.get("id")
+            if id_node and id_node.get("type") == "Identifier":
+                self._current_context = id_node.get("name")
+            self._visit_children(node)
+            self._current_context = old_context
+            return
+        
+        # 检测 process.env.KEY (MemberExpression)
+        if node_type == "MemberExpression":
+            self._handle_member_expression(node)
+        
+        # 检测 configService.get("KEY") (CallExpression)
+        if node_type == "CallExpression":
+            self._handle_call_expression(node)
+        
+        self._visit_children(node)
+    
+    def _visit_children(self, node: dict) -> None:
+        """递归访问子节点"""
+        for key, value in node.items():
+            if key in ("loc", "range"):
+                continue
+            if isinstance(value, dict):
+                self._visit(value)
+            elif isinstance(value, list):
+                for item in value:
+                    if isinstance(item, dict):
+                        self._visit(item)
+    
+    def _handle_member_expression(self, node: dict) -> None:
+        """处理 MemberExpression: process.env.KEY 或 process.env["KEY"]"""
+        obj = node.get("object", {})
+        prop = node.get("property", {})
+        computed = node.get("computed", False)
+        
+        # 检查是否是 process.env.X 或 process.env[X]
+        if not self._is_process_env(obj):
+            return
+        
+        loc = node.get("loc", {}).get("start", {})
+        line = loc.get("line", 1)
+        col = loc.get("column", 0)
+        
+        # process.env.KEY (非计算属性)
+        if not computed and prop.get("type") == "Identifier":
+            env_name = prop.get("name")
+            if env_name:
+                self.env_vars.append(EnvVarUsage(
+                    name=env_name,
+                    file_path=self.file_path,
+                    line_number=line,
+                    column_number=col,
+                    pattern="ast:process.env.X",
+                    context=self._current_context,
+                ))
+        
+        # process.env["KEY"] (计算属性，字符串字面量)
+        elif computed and prop.get("type") == "Literal" and isinstance(prop.get("value"), str):
+            env_name = prop["value"]
+            self.env_vars.append(EnvVarUsage(
+                name=env_name,
+                file_path=self.file_path,
+                line_number=line,
+                column_number=col,
+                pattern="ast:process.env[]",
+                context=self._current_context,
+            ))
+        
+        # process.env[variable] (计算属性，变量引用)
+        elif computed and prop.get("type") == "Identifier":
+            var_name = prop.get("name")
+            resolved = self.var_tracker.resolve_name(var_name)
+            if resolved:
+                self.env_vars.append(EnvVarUsage(
+                    name=resolved,
+                    file_path=self.file_path,
+                    line_number=line,
+                    column_number=col,
+                    pattern="ast:process.env[var]",
+                    context=self._current_context,
+                ))
+            else:
+                self.unresolved.append(UnresolvedRef(
+                    file_path=self.file_path,
+                    line_number=line,
+                    column_number=col,
+                    expression=f"process.env[{var_name}]",
+                    reason="Variable value not tracked",
+                ))
+        
+        # process.env[expression] (其他复杂表达式)
+        elif computed:
+            self.unresolved.append(UnresolvedRef(
+                file_path=self.file_path,
+                line_number=line,
+                column_number=col,
+                expression="process.env[<dynamic>]",
+                reason="Dynamic expression not supported",
+            ))
+    
+    def _handle_call_expression(self, node: dict) -> None:
+        """处理 CallExpression: configService.get("KEY")"""
+        callee = node.get("callee", {})
+        args = node.get("arguments", [])
+        
+        if not args:
+            return
+        
+        loc = node.get("loc", {}).get("start", {})
+        line = loc.get("line", 1)
+        col = loc.get("column", 0)
+        
+        # configService.get("KEY") 或 configService.getOrThrow("KEY")
+        if callee.get("type") == "MemberExpression":
+            obj = callee.get("object", {})
+            prop = callee.get("property", {})
+            
+            if prop.get("type") == "Identifier" and prop.get("name") in ("get", "getOrThrow"):
+                obj_name = obj.get("name", "") if obj.get("type") == "Identifier" else ""
+                # 检查是否像 configService
+                if "config" in obj_name.lower() or "env" in obj_name.lower():
+                    first_arg = args[0]
+                    if first_arg.get("type") == "Literal" and isinstance(first_arg.get("value"), str):
+                        self.env_vars.append(EnvVarUsage(
+                            name=first_arg["value"],
+                            file_path=self.file_path,
+                            line_number=line,
+                            column_number=col,
+                            pattern="ast:configService.get",
+                            source_library="nestjs-config",
+                            context=self._current_context,
+                        ))
+    
+    def _is_process_env(self, node: dict) -> bool:
+        """判断节点是否为 process.env"""
+        if node.get("type") != "MemberExpression":
+            return False
+        
+        obj = node.get("object", {})
+        prop = node.get("property", {})
+        
+        return (
+            obj.get("type") == "Identifier" and
+            obj.get("name") == "process" and
+            prop.get("type") == "Identifier" and
+            prop.get("name") == "env"
+        )
+
+
+def extract_env_vars_js_ast(content: str, file_path: str) -> tuple[list[EnvVarUsage], list[UnresolvedRef]]:
+    """
+    使用 AST 从 JS/TS 代码中提取环境变量引用
+    
+    Args:
+        content: 文件内容
+        file_path: 文件路径
+    
+    Returns:
+        (环境变量列表, 未解析引用列表)
+    """
+    extractor = JSEnvVarExtractor(file_path)
+    return extractor.extract(content)
+
+
 # 环境变量提取模式
 ENV_VAR_PATTERNS: dict[str, list[tuple[re.Pattern, int]]] = {
     "python": [
@@ -843,6 +1147,10 @@ def extract_env_vars_smart(
     2. 尝试 AST 解析 + 配置库检测
     3. 如果 AST 失败（语法错误），回退到正则
     
+    对于 JavaScript/TypeScript 文件：
+    1. 如果 esprima 可用，使用 JS AST 解析
+    2. 如果 AST 失败，回退到正则
+    
     对于其他语言：直接用正则
     
     Args:
@@ -855,6 +1163,16 @@ def extract_env_vars_smart(
         (环境变量列表, 未解析引用列表)
     """
     unresolved: list[UnresolvedRef] = []
+    
+    # JavaScript/TypeScript 文件
+    if language == "javascript":
+        if ESPRIMA_AVAILABLE and file_size <= AST_FILE_SIZE_LIMIT:
+            js_env_vars, js_unresolved = extract_env_vars_js_ast(content, file_path)
+            if js_env_vars or js_unresolved:
+                # AST 成功，返回结果
+                return js_env_vars, js_unresolved
+        # AST 失败或不可用，回退到正则
+        return extract_env_vars(content, file_path, language), unresolved
     
     # 非 Python 文件直接用正则
     if language != "python":
@@ -973,10 +1291,17 @@ def extract_system_deps(content: str, file_path: str, language: str) -> list[Sys
     return deps
 
 
+from typing import Callable
+
+# 进度回调类型: (file_path: str, language: str) -> None
+ProgressCallback = Callable[[str, str], None]
+
+
 def scan_code_files(
     repo_path: Path,
     extensions: Optional[list[str]] = None,
     use_ast: bool = True,
+    on_file: Optional[ProgressCallback] = None,
 ) -> ScanResult:
     """
     扫描代码文件
@@ -985,6 +1310,7 @@ def scan_code_files(
         repo_path: 仓库根目录
         extensions: 要扫描的文件扩展名（默认为所有支持的扩展名）
         use_ast: 是否使用 AST 解析（默认 True，对 Python 文件启用智能解析）
+        on_file: 可选的进度回调函数，每扫描一个文件时调用
     
     Returns:
         扫描结果
@@ -1000,14 +1326,23 @@ def scan_code_files(
         'dist', 'build', '.next', 'target', 'vendor',
     }
     
-    for file_path in repo_path.rglob('*'):
-        if not file_path.is_file():
-            continue
-        
-        # 检查是否在忽略目录中
-        if any(part in ignore_dirs for part in file_path.parts):
-            continue
-        
+    def safe_walk(path: Path):
+        """安全遍历目录，跳过忽略的目录和无法访问的路径"""
+        try:
+            for entry in path.iterdir():
+                try:
+                    if entry.is_dir():
+                        if entry.name not in ignore_dirs:
+                            yield from safe_walk(entry)
+                    elif entry.is_file():
+                        yield entry
+                except (OSError, PermissionError):
+                    # 跳过无法访问的路径（如 Windows 长路径问题）
+                    continue
+        except (OSError, PermissionError):
+            return
+    
+    for file_path in safe_walk(repo_path):
         # 检查扩展名
         if file_path.suffix.lower() not in extensions:
             continue
@@ -1023,6 +1358,10 @@ def scan_code_files(
             continue
         
         rel_path = str(file_path.relative_to(repo_path))
+        
+        # 调用进度回调
+        if on_file:
+            on_file(rel_path, language)
         
         # 提取环境变量（智能模式或正则模式）
         if use_ast:
@@ -1055,3 +1394,220 @@ def format_env_var(env_var: EnvVarUsage, ide_format: bool = False) -> str:
         # IDE 兼容格式：file:line:column: ENV_VAR_NAME
         return f"{env_var.file_path}:{env_var.line_number}:{env_var.column_number}: {env_var.name}"
     return f"{env_var.name} ({env_var.file_path}:{env_var.line_number})"
+
+
+# ============================================================================
+# DotEnv 文件解析
+# ============================================================================
+
+@dataclass
+class DotEnvEntry:
+    """
+    dotenv 文件条目
+    
+    Attributes:
+        name: 变量名
+        value: 值（可选）
+        comment: 注释（可选）
+        line_number: 行号
+        file_path: 来源文件
+    """
+    name: str
+    value: Optional[str] = None
+    comment: Optional[str] = None
+    line_number: int = 0
+    file_path: str = ""
+
+
+# .env 文件名模式
+DOTENV_FILE_PATTERNS = [
+    ".env.example",
+    ".env.sample",
+    ".env.template",
+    ".env.development.example",
+    ".env.production.example",
+    ".env.local.example",
+    ".env.test.example",
+]
+
+
+def parse_dotenv_file(file_path: Path) -> list[DotEnvEntry]:
+    """
+    解析 .env 文件
+    
+    支持格式:
+    - KEY=value
+    - KEY="quoted value"
+    - KEY='single quoted'
+    - # comment
+    - KEY=value # inline comment
+    - export KEY=value
+    
+    Args:
+        file_path: .env 文件路径
+    
+    Returns:
+        DotEnvEntry 列表
+    """
+    entries: list[DotEnvEntry] = []
+    
+    try:
+        content = file_path.read_text(encoding='utf-8', errors='ignore')
+    except Exception as e:
+        logger.warning(f"Failed to read {file_path}: {e}")
+        return entries
+    
+    # 正则匹配 .env 行
+    # 支持: KEY=value, export KEY=value, KEY="value", KEY='value'
+    line_pattern = re.compile(
+        r'^(?:export\s+)?'  # 可选的 export
+        r'([A-Za-z_][A-Za-z0-9_]*)'  # 变量名
+        r'\s*=\s*'  # 等号
+        r'(?:'
+        r'"([^"]*)"'  # 双引号值
+        r"|'([^']*)'"  # 单引号值
+        r'|([^#\n]*?)'  # 无引号值
+        r')'
+        r'(?:\s*#\s*(.*))?$'  # 可选的行内注释
+    )
+    
+    comment_pattern = re.compile(r'^\s*#\s*(.*)$')
+    
+    pending_comment: Optional[str] = None
+    
+    for line_num, line in enumerate(content.split('\n'), 1):
+        line = line.strip()
+        
+        # 空行
+        if not line:
+            pending_comment = None
+            continue
+        
+        # 纯注释行（可能是下一个变量的描述）
+        comment_match = comment_pattern.match(line)
+        if comment_match and '=' not in line:
+            pending_comment = comment_match.group(1).strip()
+            continue
+        
+        # 变量定义行
+        match = line_pattern.match(line)
+        if match:
+            name = match.group(1)
+            # 值可能在 group 2, 3, 或 4
+            value = match.group(2) or match.group(3) or (match.group(4).strip() if match.group(4) else None)
+            inline_comment = match.group(5)
+            
+            # 使用行内注释或之前的注释
+            comment = inline_comment.strip() if inline_comment else pending_comment
+            
+            entries.append(DotEnvEntry(
+                name=name,
+                value=value,
+                comment=comment,
+                line_number=line_num,
+                file_path=str(file_path),
+            ))
+            
+            pending_comment = None
+    
+    return entries
+
+
+def parse_dotenv_content(content: str, file_path: str = "") -> list[DotEnvEntry]:
+    """
+    解析 .env 文件内容字符串
+    
+    Args:
+        content: .env 文件内容
+        file_path: 文件路径（用于记录）
+    
+    Returns:
+        DotEnvEntry 列表
+    """
+    entries: list[DotEnvEntry] = []
+    
+    line_pattern = re.compile(
+        r'^(?:export\s+)?'
+        r'([A-Za-z_][A-Za-z0-9_]*)'
+        r'\s*=\s*'
+        r'(?:'
+        r'"([^"]*)"'
+        r"|'([^']*)'"
+        r'|([^#\n]*?)'
+        r')'
+        r'(?:\s*#\s*(.*))?$'
+    )
+    
+    comment_pattern = re.compile(r'^\s*#\s*(.*)$')
+    pending_comment: Optional[str] = None
+    
+    for line_num, line in enumerate(content.split('\n'), 1):
+        line = line.strip()
+        
+        if not line:
+            pending_comment = None
+            continue
+        
+        comment_match = comment_pattern.match(line)
+        if comment_match and '=' not in line:
+            pending_comment = comment_match.group(1).strip()
+            continue
+        
+        match = line_pattern.match(line)
+        if match:
+            name = match.group(1)
+            value = match.group(2) or match.group(3) or (match.group(4).strip() if match.group(4) else None)
+            inline_comment = match.group(5)
+            comment = inline_comment.strip() if inline_comment else pending_comment
+            
+            entries.append(DotEnvEntry(
+                name=name,
+                value=value,
+                comment=comment,
+                line_number=line_num,
+                file_path=file_path,
+            ))
+            pending_comment = None
+    
+    return entries
+
+
+def collect_documented_env_vars(repo_path: Path) -> dict[str, list[str]]:
+    """
+    收集所有文档来源中的环境变量
+    
+    来源:
+    1. .env.example 等文件
+    
+    Args:
+        repo_path: 仓库根目录
+    
+    Returns:
+        字典，键为变量名，值为来源文件列表
+    """
+    documented: dict[str, list[str]] = {}
+    
+    for pattern in DOTENV_FILE_PATTERNS:
+        env_file = repo_path / pattern
+        if env_file.exists():
+            entries = parse_dotenv_file(env_file)
+            for entry in entries:
+                if entry.name not in documented:
+                    documented[entry.name] = []
+                documented[entry.name].append(entry.file_path)
+    
+    return documented
+
+
+def get_documented_env_var_names(repo_path: Path) -> set[str]:
+    """
+    获取所有文档化的环境变量名称
+    
+    Args:
+        repo_path: 仓库根目录
+    
+    Returns:
+        环境变量名称集合
+    """
+    documented = collect_documented_env_vars(repo_path)
+    return set(documented.keys())

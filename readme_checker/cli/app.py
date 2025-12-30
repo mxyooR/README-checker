@@ -27,7 +27,7 @@ from readme_checker.reporters import RichReporter, JsonReporter
 # 创建 Typer 应用实例
 app = typer.Typer(
     name="checker",
-    help="README-Checker: Static documentation linter for CI/CD. 🔍",
+    help="README-Checker: Static documentation linter for CI/CD.",
     add_completion=False,
 )
 
@@ -139,12 +139,22 @@ def check(
     # 3. 扫描代码库
     if verbose:
         console.print("[dim]Scanning codebase...[/dim]")
-    
-    scan_result = scan_code_files(repo_path)
+        file_count = 0
+        
+        def on_file_scanned(file_path: str, language: str) -> None:
+            nonlocal file_count
+            file_count += 1
+            console.print(f"[dim]  ({language}) {file_path}[/dim]")
+        
+        scan_result = scan_code_files(repo_path, on_file=on_file_scanned)
+        console.print(f"[dim]  Scanned {file_count} files[/dim]")
+    else:
+        scan_result = scan_code_files(repo_path)
     
     if verbose:
         console.print(f"[dim]  - {len(scan_result.env_vars)} env var usages[/dim]")
         console.print(f"[dim]  - {len(scan_result.system_deps)} system deps[/dim]")
+
     
     # 4. 检测项目类型并提取元数据
     project_type = detect_project_type(repo_path)
@@ -231,7 +241,6 @@ def version() -> None:
     """Show the version of README-Checker."""
     from readme_checker import __version__
     console.print(f"[bold]README-Checker[/bold] v{__version__}")
-    console.print("[dim]Static documentation linter for CI/CD. 🔍[/dim]")
 
 
 if __name__ == "__main__":
