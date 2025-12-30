@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "readme-checker"
 version = "0.1.0"
-description = "检测 GitHub 项目 README 文档真实性的 CLI 工具 - Stop lies. Verify your docs."
+description = "检测项目 README 文档真实性的 CLI 工具 - Stop lies. Verify your docs."
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
