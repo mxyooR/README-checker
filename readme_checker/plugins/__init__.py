@@ -1,25 +1,23 @@
-"""Ecosystem plugin system for README-Police V3.
+"""Ecosystem plugin system for README-Checker.
 
 This module provides a plugin architecture for supporting different
-language ecosystems (Node.js, Python, Go, Java, etc.).
+language ecosystems (Node.js, Python, Go, Java, Rust, C++ etc.).
+
+插件通过 PluginRegistry 自动发现和注册，无需手动 import。
 """
 
 from readme_checker.plugins.base import (
     EcosystemInfo,
     EcosystemPlugin,
     PluginRegistry,
+    ProjectMetadata,
     VerificationResult,
 )
-
-# Import plugins to auto-register them
-from readme_checker.plugins import nodejs
-from readme_checker.plugins import python
-from readme_checker.plugins import golang
-from readme_checker.plugins import java
 
 __all__ = [
     "EcosystemInfo",
     "EcosystemPlugin",
     "PluginRegistry",
+    "ProjectMetadata",
     "VerificationResult",
 ]

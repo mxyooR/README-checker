@@ -8,7 +8,6 @@ CLI 入口模块 - 使用 Typer 构建命令行界面
 4. 生成报告
 """
 
-import re
 from pathlib import Path
 from typing import Optional
 
@@ -22,12 +21,8 @@ from readme_checker.core import (
     ValidationResult,
 )
 from readme_checker.core.validator import Issue
-from readme_checker.plugins.python import PythonPlugin
-from readme_checker.plugins.nodejs import NodeJsPlugin
-from readme_checker.plugins.golang import GoPlugin
-from readme_checker.plugins.java import JavaPlugin
-from readme_checker.plugins.cpp import CppPlugin
-from readme_checker.plugins.rust import RustPlugin
+from readme_checker.core.parser import CodeBlock
+from readme_checker.plugins.base import PluginRegistry
 from readme_checker.reporters import RichReporter, JsonReporter
 
 # 创建 Typer 应用实例
@@ -43,37 +38,16 @@ console = Console(legacy_windows=False)
 
 
 def detect_project_type(repo_path: Path) -> str | None:
-    """检测项目类型"""
-    if (repo_path / "pyproject.toml").exists() or (repo_path / "setup.py").exists():
-        return "python"
-    if (repo_path / "package.json").exists():
-        return "nodejs"
-    if (repo_path / "go.mod").exists():
-        return "go"
-    if (repo_path / "Cargo.toml").exists():
-        return "rust"
-    if (repo_path / "pom.xml").exists() or (repo_path / "build.gradle").exists() or (repo_path / "build.gradle.kts").exists():
-        return "java"
-    if (repo_path / "CMakeLists.txt").exists() or (repo_path / "Makefile").exists() or (repo_path / "meson.build").exists():
-        return "cpp"
-    return None
+    """检测项目类型（使用插件注册表）"""
+    plugin = PluginRegistry.detect_ecosystem(repo_path)
+    return plugin.info.name if plugin else None
 
 
 def get_plugin(project_type: str | None):
-    """获取对应的插件"""
-    if project_type == "python":
-        return PythonPlugin()
-    if project_type == "nodejs":
-        return NodeJsPlugin()
-    if project_type == "go":
-        return GoPlugin()
-    if project_type == "java":
-        return JavaPlugin()
-    if project_type == "rust":
-        return RustPlugin()
-    if project_type == "cpp":
-        return CppPlugin()
-    return None
+    """获取对应的插件（使用插件注册表）"""
+    if not project_type:
+        return None
+    return PluginRegistry.get_plugin(project_type)
 
 
 def find_readme(repo_path: Path) -> Path | None:
@@ -86,36 +60,52 @@ def find_readme(repo_path: Path) -> Path | None:
     return None
 
 
-def extract_commands_from_readme(content: str) -> list[tuple[str, int]]:
+# Shell 代码块的语言标识符
+SHELL_LANGUAGES = {'bash', 'sh', 'shell', 'console', 'terminal', 'zsh'}
+
+# 常见命令前缀
+COMMAND_PREFIXES = [
+    'npm ', 'yarn ', 'pnpm ', 'npx ',
+    'python ', 'python3 ', 'pip ', 'poetry ', 'pipenv ',
+    'go ', 'cargo ', 'rustc ', 'rustup ',  # Go & Rust
+    'make ', 'cmake ', 'ninja ', 'meson ',  # C/C++
+    'gcc ', 'g++ ', 'clang ', 'clang++ ',  # Compilers
+    'docker ', 'kubectl ',
+    'mvn ', './mvnw ', 'gradle ', './gradlew ',  # Java
+]
+
+
+def extract_commands_from_code_blocks(code_blocks: list[CodeBlock]) -> list[tuple[str, int]]:
     """
-    从 README 中提取命令
+    从已解析的代码块中提取命令
     
-    提取代码块中的 shell 命令（bash, sh, shell, console, terminal）
+    复用 markdown-it-py 解析的 CodeBlock，不再重复用正则解析。
+    
+    Args:
+        code_blocks: 由 parse_markdown() 返回的代码块列表
     
     Returns:
         [(command, line_number), ...]
     """
     commands: list[tuple[str, int]] = []
     
-    # 匹配代码块
-    code_block_pattern = re.compile(
-        r'^```(bash|sh|shell|console|terminal|zsh)?\s*\n(.*?)^```',
-        re.MULTILINE | re.DOTALL
-    )
-    
-    lines = content.split('\n')
-    current_pos = 0
-    
-    for match in code_block_pattern.finditer(content):
-        block_content = match.group(2)
-        # 计算行号
-        line_num = content[:match.start()].count('\n') + 2
+    for block in code_blocks:
+        # 只处理 shell 类型的代码块
+        lang = (block.language or '').lower()
+        if lang and lang not in SHELL_LANGUAGES:
+            continue
         
-        for i, line in enumerate(block_content.split('\n')):
+        # 如果没有语言标记，跳过（避免误判）
+        if not lang:
+            continue
+        
+        for i, line in enumerate(block.content.split('\n')):
             line = line.strip()
+            
             # 跳过空行和注释
             if not line or line.startswith('#'):
                 continue
+            
             # 移除 $ 或 > 提示符
             if line.startswith('$ '):
                 line = line[2:]
@@ -123,16 +113,8 @@ def extract_commands_from_readme(content: str) -> list[tuple[str, int]]:
                 line = line[2:]
             
             # 只提取看起来像命令的行
-            if any(line.startswith(cmd) for cmd in [
-                'npm ', 'yarn ', 'pnpm ', 'npx ',
-                'python ', 'python3 ', 'pip ', 'poetry ', 'pipenv ',
-                'go ', 'cargo ', 'rustc ', 'rustup ',  # Go & Rust
-                'make ', 'cmake ', 'ninja ', 'meson ',  # C/C++
-                'gcc ', 'g++ ', 'clang ', 'clang++ ',  # Compilers
-                'docker ', 'kubectl ',
-                'mvn ', './mvnw ', 'gradle ', './gradlew ',  # Java
-            ]):
-                commands.append((line, line_num + i))
+            if any(line.startswith(prefix) for prefix in COMMAND_PREFIXES):
+                commands.append((line, block.line_number + i))
     
     return commands
 
@@ -321,8 +303,8 @@ def check(
         )
         result.issues.extend(dep_issues)
     
-    # 命令验证
-    commands = extract_commands_from_readme(readme_content)
+    # 命令验证（复用已解析的 code_blocks，不再重复解析）
+    commands = extract_commands_from_code_blocks(parsed.code_blocks)
     if verbose and commands:
         console.print(f"[dim]  - {len(commands)} commands found in README[/dim]")
     
