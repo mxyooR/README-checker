@@ -6,10 +6,9 @@
 
 <p align="center">
   <a href="#安装">安装</a> •
-  <a href="#快速开始">快速开始</a> •
+  <a href="#使用方法">使用方法</a> •
   <a href="#功能特性">功能特性</a> •
-  <a href="#支持的语言">支持的语言</a> •
-  <a href="#命令参考">命令参考</a> •
+  <a href="#选项说明">选项说明</a> •
   <a href="./README.md">English</a>
 </p>
 
@@ -21,7 +20,7 @@ README-Checker 是一个静态文档检查工具，用于验证 README 与实际
 
 你是否遇到过这些情况：
 
-- � 代码中使用了环境变量l，但 README 里从未提及
+- 🔐 代码中使用了环境变量，但 README 里从未提及
 - 🔗 `./docs/guide.md` 链接指向不存在的文件
 - 📦 `npm run build` 失败，因为 `package.json` 里根本没有 `build` 脚本
 - 📋 README 中的版本号与 `package.json` 不一致
@@ -30,47 +29,29 @@ README-Checker 帮你在用户发现之前捕获这些问题。
 
 ## 安装
 
-### 预编译版本（无需 Python）
-
-从 [Releases](https://github.com/user/readme-checker/releases) 下载：
-
-| 平台 | 文件 | 大小 |
-|------|------|------|
-| Windows | `checker.exe` | ~10 MB |
-
-### 从源码安装
-
 ```bash
-# 从 GitHub 安装
 pip install git+https://github.com/user/readme-checker.git
-
-# 或克隆后本地安装
-git clone https://github.com/user/readme-checker.git
-cd readme-checker
-pip install -e .
 ```
 
-### 环境要求
+环境要求：Python 3.10+
 
-- Python 3.10+（仅源码安装需要）
-
-## 快速开始
+## 使用方法
 
 ```bash
-# 检查当前目录
-checker
+checker [选项] [路径]
+```
 
-# 检查指定项目
-checker check ./my-project
+**示例：**
 
-# 详细输出（显示扫描的文件）
-checker check -v
-
-# JSON 输出（适用于 CI/CD）
-checker check --format json
-
-# 显示版本
-checker -V
+```bash
+checker                      # 检查当前目录
+checker ./my-project         # 检查指定项目
+checker -v                   # 详细输出（显示扫描的文件）
+checker -f json              # JSON 输出（适用于 CI/CD）
+checker -i env-vars          # 忽略环境变量检查
+checker -i env-vars -i deps  # 忽略多项检查
+checker -V                   # 显示版本
+checker --help               # 显示帮助
 ```
 
 ## 功能特性
@@ -81,84 +62,50 @@ checker -V
 
 **支持的模式：**
 - Python: `os.getenv()`, `os.environ[]`, pydantic `BaseSettings`, python-decouple, django-environ
-- JavaScript/TypeScript: `process.env.KEY`, `process.env["KEY"]`, NestJS ConfigService
+- JavaScript/TypeScript: `process.env.KEY`, NestJS ConfigService
 - Go: `os.Getenv()`, `os.LookupEnv()`
-- C/C++: `getenv()`, `std::getenv()`
-- Java: `System.getenv()`, `System.getProperty()`
-- Rust: `std::env::var()`, `env::var()`
+- Rust: `std::env::var()`
+- Java: `System.getenv()`
+- C/C++: `getenv()`
 
 ### 🔗 链接验证
 
-验证 README 中的所有链接：
-- ✅ 相对文件链接是否存在
-- ✅ 锚点链接是否指向有效的标题
-- ⚠️ 警告指向自己仓库的绝对 URL
-
-### 📝 代码块验证
-
-- 检查缺失的语言标识符
-- 验证代码块中的 JSON 语法
-- 验证代码块中的 YAML 语法
-- 智能检测：跳过目录树和纯文本
+- 相对文件链接是否存在
+- 锚点链接是否指向有效的标题
+- 警告指向自己仓库的绝对 URL
 
 ### 💻 命令验证
 
 验证 README 代码块中的命令是否真正可用：
-- **Python**: 检查 `pip install`、`poetry run`、脚本是否存在
-- **Node.js**: 验证 `npm run` 脚本是否在 `package.json` 中存在
-- **Go**: 验证 `go run`、`go build` 目标
-- **Java**: 检查 Maven/Gradle 命令和包装器
+- `pip install <pkg>` - 检查包是否在 requirements.txt/pyproject.toml 中声明
+- `npm install <pkg>` - 检查包是否在 package.json 中
+- `npm run <script>` - 检查脚本是否在 package.json 中存在
+- `python <script.py>` - 检查脚本文件是否存在
+- `go run`, `cargo build` - 检查目标是否存在
 
 ### 📊 元数据一致性
 
-从项目配置文件提取元数据并与 README 对比：
-- 版本号一致性
-- 许可证一致性
+- 版本号与项目配置一致
+- 许可证与 LICENSE 文件一致
 
 ### 🔧 系统依赖检测
 
 检测代码中的系统工具调用（subprocess、exec 等），如果未文档化则发出警告：
-- `ffmpeg`、`docker`、`kubectl`、`git` 等
+- `ffmpeg`, `docker`, `kubectl`, `git`, `curl` 等
 
-## 支持的语言
-
-| 语言 | 环境变量检测 | AST 解析 | 命令验证 |
-|------|-------------|---------|---------|
-| Python | ✅ 完整 | ✅ AST | ✅ pip, poetry |
-| JavaScript/TypeScript | ✅ 完整 | ✅ esprima | ✅ npm, yarn |
-| Go | ✅ 正则 | ❌ | ✅ go 命令 |
-| Rust | ✅ 正则 | ❌ | ✅ cargo, rustc |
-| Java | ✅ 正则 | ❌ | ✅ mvn, gradle |
-| C/C++ | ✅ 正则 | ❌ | ✅ cmake, make |
-
-## 命令参考
-
-### `checker` / `checker check [PATH]`
-
-检查项目 README 与代码库的一致性。
-
-```bash
-checker                          # 检查当前目录
-checker check .                  # 同上
-checker check ./my-project       # 检查指定路径
-checker check -v                 # 详细输出
-checker check -f json            # JSON 输出
-checker check -i version         # 忽略版本检查
-checker check -i env-vars -i license  # 忽略多项检查
-checker check --repo-url "github.com/user/repo"  # 检测绝对 URL
-```
+## 选项说明
 
 | 选项 | 说明 |
 |------|------|
 | `PATH` | 项目路径（默认：`.`） |
-| `-v, --verbose` | 显示详细输出，包括扫描的文件 |
+| `-v, --verbose` | 显示详细输出（扫描的文件、解析的元素） |
 | `-f, --format` | 输出格式：`rich`（默认）或 `json` |
 | `-i, --ignore` | 忽略特定检查（可多次使用） |
 | `--repo-url` | 用于检测绝对 URL 的仓库 URL 模式 |
+| `-V, --version` | 显示版本并退出 |
+| `--help` | 显示帮助 |
 
-#### 忽略选项
-
-使用 `-i` 或 `--ignore` 跳过特定检查：
+### 忽略选项
 
 | 值 | 说明 |
 |----|------|
@@ -169,18 +116,6 @@ checker check --repo-url "github.com/user/repo"  # 检测绝对 URL
 | `version` | 跳过版本一致性检查 |
 | `license` | 跳过许可证一致性检查 |
 | `commands` | 跳过命令验证 |
-
-### `checker version`
-
-显示版本信息。
-
-### `checker -V` / `checker --version`
-
-显示版本并退出。
-
-### `checker -h` / `checker --help`
-
-显示帮助信息。
 
 ## 输出示例
 
@@ -207,67 +142,27 @@ Issues Found:
 
 ## CI/CD 集成
 
-### GitHub Actions
-
 ```yaml
+# GitHub Actions
 - name: Check README
   run: |
     pip install git+https://github.com/user/readme-checker.git
-    checker check --format json > report.json
+    checker -f json
 ```
 
-### 退出码
+退出码：`0` = 通过，`1` = 发现错误
 
-- `0`: 所有检查通过（警告不影响）
-- `1`: 发现错误
+## 支持的语言
 
-## 项目结构
-
-```
-readme_checker/
-├── cli/           # CLI 接口（Typer）
-│   └── app.py     # 主要 CLI 命令
-├── core/          # 核心功能
-│   ├── parser.py  # Markdown 解析
-│   ├── scanner/   # 代码扫描（模块化）
-│   │   ├── models.py      # 数据类
-│   │   ├── patterns.py    # 正则模式
-│   │   ├── python_ast.py  # Python AST 解析
-│   │   ├── js_ast.py      # JavaScript AST 解析
-│   │   ├── dotenv.py      # .env 文件解析
-│   │   └── core.py        # 主扫描函数
-│   └── validator.py # 验证逻辑
-├── plugins/       # 语言插件
-│   ├── python.py  # Python 生态
-│   ├── nodejs.py  # Node.js 生态
-│   ├── golang.py  # Go 生态
-│   ├── java.py    # Java 生态
-│   ├── rust.py    # Rust 生态
-│   └── cpp.py     # C/C++ 生态
-└── reporters/     # 输出格式化
-    ├── rich_reporter.py  # Rich 终端输出
-    └── json_reporter.py  # JSON 输出
-```
-
-## 开发
-
-```bash
-# 安装开发依赖
-pip install -e ".[dev]"
-
-# 运行测试
-pytest tests/ -v
-
-# 运行覆盖率测试
-pytest tests/ --cov=readme_checker
-```
+| 语言 | 环境变量检测 | AST 解析 | 命令验证 |
+|------|-------------|---------|---------|
+| Python | ✅ 完整 | ✅ AST | ✅ pip, poetry |
+| JavaScript/TypeScript | ✅ 完整 | ✅ esprima | ✅ npm, yarn, pnpm |
+| Go | ✅ 正则 | ❌ | ✅ go 命令 |
+| Rust | ✅ 正则 | ❌ | ✅ cargo, rustc |
+| Java | ✅ 正则 | ❌ | ✅ mvn, gradle |
+| C/C++ | ✅ 正则 | ❌ | ✅ cmake, make |
 
 ## 许可证
 
-MIT 许可证 - 详见 [LICENSE](LICENSE) 文件。
-
----
-
-<p align="center">
-  <em>用 ❤️ 构建，让文档保持诚实</em>
-</p>
+MIT

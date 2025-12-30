@@ -6,10 +6,9 @@
 
 <p align="center">
   <a href="#installation">Installation</a> •
-  <a href="#quick-start">Quick Start</a> •
+  <a href="#usage">Usage</a> •
   <a href="#features">Features</a> •
-  <a href="#supported-languages">Supported Languages</a> •
-  <a href="#cli-reference">CLI Reference</a> •
+  <a href="#options">Options</a> •
   <a href="./README_CN.md">中文文档</a>
 </p>
 
@@ -30,47 +29,29 @@ README-Checker catches these issues before your users do.
 
 ## Installation
 
-### Pre-built Binary (No Python Required)
-
-Download from [Releases](https://github.com/user/readme-checker/releases):
-
-| Platform | File | Size |
-|----------|------|------|
-| Windows | `checker.exe` | ~10 MB |
-
-### From Source
-
 ```bash
-# Install from GitHub
 pip install git+https://github.com/user/readme-checker.git
-
-# Or clone and install locally
-git clone https://github.com/user/readme-checker.git
-cd readme-checker
-pip install -e .
 ```
 
-### Requirements
+Requirements: Python 3.10+
 
-- Python 3.10+ (source installation only)
-
-## Quick Start
+## Usage
 
 ```bash
-# Check current directory
-checker
+checker [OPTIONS] [PATH]
+```
 
-# Check a specific project
-checker check ./my-project
+**Examples:**
 
-# Verbose output (shows scanned files)
-checker check -v
-
-# JSON output for CI/CD
-checker check --format json
-
-# Show version
-checker -V
+```bash
+checker                      # Check current directory
+checker ./my-project         # Check specific project
+checker -v                   # Verbose output (shows scanned files)
+checker -f json              # JSON output for CI/CD
+checker -i env-vars          # Ignore environment variable checks
+checker -i env-vars -i deps  # Ignore multiple checks
+checker -V                   # Show version
+checker --help               # Show help
 ```
 
 ## Features
@@ -81,84 +62,50 @@ Scans your codebase for environment variable usage and verifies they're document
 
 **Supported patterns:**
 - Python: `os.getenv()`, `os.environ[]`, pydantic `BaseSettings`, python-decouple, django-environ
-- JavaScript/TypeScript: `process.env.KEY`, `process.env["KEY"]`, NestJS ConfigService
+- JavaScript/TypeScript: `process.env.KEY`, NestJS ConfigService
 - Go: `os.Getenv()`, `os.LookupEnv()`
-- C/C++: `getenv()`, `std::getenv()`
-- Java: `System.getenv()`, `System.getProperty()`
-- Rust: `std::env::var()`, `env::var()`
+- Rust: `std::env::var()`
+- Java: `System.getenv()`
+- C/C++: `getenv()`
 
 ### 🔗 Link Validation
 
-Validates all links in your README:
-- ✅ Relative file links exist
-- ✅ Anchor links point to valid headers
-- ⚠️ Warns about absolute URLs to your own repo
-
-### 📝 Code Block Validation
-
-- Checks for missing language identifiers
-- Validates JSON syntax in code blocks
-- Validates YAML syntax in code blocks
-- Smart detection: skips directory trees and plain text
+- Relative file links exist
+- Anchor links point to valid headers
+- Warns about absolute URLs to your own repo
 
 ### 💻 Command Verification
 
 Verifies commands in README code blocks actually work:
-- **Python**: Checks `pip install`, `poetry run`, script existence
-- **Node.js**: Validates `npm run` scripts exist in `package.json`
-- **Go**: Verifies `go run`, `go build` targets
-- **Java**: Checks Maven/Gradle commands and wrappers
+- `pip install <pkg>` - checks if package is declared in requirements.txt/pyproject.toml
+- `npm install <pkg>` - checks if package is in package.json
+- `npm run <script>` - checks if script exists in package.json
+- `python <script.py>` - checks if script file exists
+- `go run`, `cargo build` - checks if targets exist
 
 ### 📊 Metadata Consistency
 
-Extracts metadata from your project config and compares with README:
-- Version number consistency
-- License consistency
+- Version number matches project config
+- License matches LICENSE file
 
 ### 🔧 System Dependency Detection
 
-Detects system tool calls in code (subprocess, exec, etc.) and warns if not documented:
-- `ffmpeg`, `docker`, `kubectl`, `git`, etc.
+Detects system tool calls in code (subprocess, exec, etc.) and warns if undocumented:
+- `ffmpeg`, `docker`, `kubectl`, `git`, `curl`, etc.
 
-## Supported Languages
-
-| Language | Env Var Detection | AST Parsing | Command Verification |
-|----------|-------------------|-------------|---------------------|
-| Python | ✅ Full | ✅ AST | ✅ pip, poetry |
-| JavaScript/TypeScript | ✅ Full | ✅ esprima | ✅ npm, yarn |
-| Go | ✅ Regex | ❌ | ✅ go commands |
-| Rust | ✅ Regex | ❌ | ✅ cargo, rustc |
-| Java | ✅ Regex | ❌ | ✅ mvn, gradle |
-| C/C++ | ✅ Regex | ❌ | ✅ cmake, make |
-
-## CLI Reference
-
-### `checker` / `checker check [PATH]`
-
-Check a project's README for consistency with codebase.
-
-```bash
-checker                          # Check current directory
-checker check .                  # Same as above
-checker check ./my-project       # Check specific path
-checker check -v                 # Verbose output
-checker check -f json            # JSON output
-checker check -i version         # Ignore version checks
-checker check -i env-vars -i license  # Ignore multiple checks
-checker check --repo-url "github.com/user/repo"  # Detect absolute URLs
-```
+## Options
 
 | Option | Description |
 |--------|-------------|
-| `PATH` | Path to project (default: `.`) |
-| `-v, --verbose` | Show detailed output including scanned files |
+| `PATH` | Project directory to check (default: `.`) |
+| `-v, --verbose` | Show detailed output (scanned files, parsed elements) |
 | `-f, --format` | Output format: `rich` (default) or `json` |
 | `-i, --ignore` | Ignore specific checks (can be used multiple times) |
 | `--repo-url` | Repository URL pattern for absolute URL detection |
+| `-V, --version` | Show version and exit |
+| `--help` | Show help |
 
-#### Ignore Options
-
-Use `-i` or `--ignore` to skip specific checks:
+### Ignore Options
 
 | Value | Description |
 |-------|-------------|
@@ -166,21 +113,9 @@ Use `-i` or `--ignore` to skip specific checks:
 | `code-blocks` | Skip code block validation |
 | `env-vars` | Skip environment variable checks |
 | `deps` | Skip system dependency checks |
-| `version` | Skip version consistency checks |
-| `license` | Skip license consistency checks |
+| `version` | Skip version consistency |
+| `license` | Skip license consistency |
 | `commands` | Skip command verification |
-
-### `checker version`
-
-Show version information.
-
-### `checker -V` / `checker --version`
-
-Show version and exit.
-
-### `checker -h` / `checker --help`
-
-Show help message.
 
 ## Output Example
 
@@ -207,67 +142,27 @@ Issues Found:
 
 ## CI/CD Integration
 
-### GitHub Actions
-
 ```yaml
+# GitHub Actions
 - name: Check README
   run: |
     pip install git+https://github.com/user/readme-checker.git
-    checker check --format json > report.json
+    checker -f json
 ```
 
-### Exit Codes
+Exit codes: `0` = passed, `1` = errors found
 
-- `0`: All checks passed (warnings are OK)
-- `1`: Errors found
+## Supported Languages
 
-## Project Structure
-
-```
-readme_checker/
-├── cli/           # CLI interface (Typer)
-│   └── app.py     # Main CLI commands
-├── core/          # Core functionality
-│   ├── parser.py  # Markdown parsing
-│   ├── scanner/   # Code scanning (modular)
-│   │   ├── models.py      # Data classes
-│   │   ├── patterns.py    # Regex patterns
-│   │   ├── python_ast.py  # Python AST parsing
-│   │   ├── js_ast.py      # JavaScript AST parsing
-│   │   ├── dotenv.py      # .env file parsing
-│   │   └── core.py        # Main scan function
-│   └── validator.py # Validation logic
-├── plugins/       # Language plugins
-│   ├── python.py  # Python ecosystem
-│   ├── nodejs.py  # Node.js ecosystem
-│   ├── golang.py  # Go ecosystem
-│   ├── java.py    # Java ecosystem
-│   ├── rust.py    # Rust ecosystem
-│   └── cpp.py     # C/C++ ecosystem
-└── reporters/     # Output formatters
-    ├── rich_reporter.py  # Rich terminal output
-    └── json_reporter.py  # JSON output
-```
-
-## Development
-
-```bash
-# Install with dev dependencies
-pip install -e ".[dev]"
-
-# Run tests
-pytest tests/ -v
-
-# Run with coverage
-pytest tests/ --cov=readme_checker
-```
+| Language | Env Var Detection | AST Parsing | Command Verification |
+|----------|-------------------|-------------|---------------------|
+| Python | ✅ Full | ✅ AST | ✅ pip, poetry |
+| JavaScript/TypeScript | ✅ Full | ✅ esprima | ✅ npm, yarn, pnpm |
+| Go | ✅ Regex | ❌ | ✅ go commands |
+| Rust | ✅ Regex | ❌ | ✅ cargo, rustc |
+| Java | ✅ Regex | ❌ | ✅ mvn, gradle |
+| C/C++ | ✅ Regex | ❌ | ✅ cmake, make |
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) file for details.
-
----
-
-<p align="center">
-  <em>Built with ❤️ to keep documentation honest</em>
-</p>
+MIT
