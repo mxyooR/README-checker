@@ -89,14 +89,9 @@ class PythonPlugin(EcosystemPlugin):
             script_name = parts[2]
             return self._verify_poetry_script(script_name, repo_path)
         
-        # pip install - always valid
+        # pip install - 验证包是否在依赖文件中声明
         if cmd_lower.startswith("pip install"):
-            return VerificationResult(
-                claim=command,
-                status="verified",
-                message="pip install command",
-                severity="info",
-            )
+            return self._verify_pip_install(command, repo_path)
         
         return None
     
@@ -142,6 +137,175 @@ class PythonPlugin(EcosystemPlugin):
             message=f"Module '{module_name}' not found",
             severity="warning",
         )
+    
+    def _verify_pip_install(self, command: str, repo_path: Path) -> VerificationResult:
+        """
+        验证 pip install 命令
+        
+        检查：
+        1. 如果是 pip install -r requirements.txt，验证文件存在
+        2. 如果是 pip install -e .，验证 setup.py/pyproject.toml 存在
+        3. 如果是 pip install <package>，检查是否在依赖文件中声明
+        """
+        parts = command.strip().split()
+        
+        # pip install -r requirements.txt
+        if "-r" in parts:
+            try:
+                idx = parts.index("-r")
+                if idx + 1 < len(parts):
+                    req_file = parts[idx + 1]
+                    if (repo_path / req_file).exists():
+                        return VerificationResult(
+                            claim=command,
+                            status="verified",
+                            message=f"Requirements file '{req_file}' found",
+                            severity="info",
+                        )
+                    return VerificationResult(
+                        claim=command,
+                        status="missing",
+                        message=f"Requirements file '{req_file}' not found",
+                        severity="warning",
+                    )
+            except (ValueError, IndexError):
+                pass
+        
+        # pip install -e . (editable install)
+        if "-e" in parts and "." in parts:
+            has_setup = (repo_path / "setup.py").exists() or (repo_path / "pyproject.toml").exists()
+            if has_setup:
+                return VerificationResult(
+                    claim=command,
+                    status="verified",
+                    message="Editable install (setup.py/pyproject.toml found)",
+                    severity="info",
+                )
+            return VerificationResult(
+                claim=command,
+                status="missing",
+                message="No setup.py or pyproject.toml for editable install",
+                severity="warning",
+            )
+        
+        # pip install . (local install)
+        if parts[-1] == ".":
+            has_setup = (repo_path / "setup.py").exists() or (repo_path / "pyproject.toml").exists()
+            if has_setup:
+                return VerificationResult(
+                    claim=command,
+                    status="verified",
+                    message="Local install (setup.py/pyproject.toml found)",
+                    severity="info",
+                )
+            return VerificationResult(
+                claim=command,
+                status="missing",
+                message="No setup.py or pyproject.toml for local install",
+                severity="warning",
+            )
+        
+        # pip install <package> - 检查是否在依赖文件中
+        packages = [p for p in parts[2:] if not p.startswith("-")]
+        if not packages:
+            return VerificationResult(
+                claim=command,
+                status="verified",
+                message="pip install command (no packages specified)",
+                severity="info",
+            )
+        
+        # 收集所有声明的依赖
+        declared_deps = self._collect_declared_dependencies(repo_path)
+        
+        # 检查每个包是否已声明
+        missing_packages = []
+        for pkg in packages:
+            # 规范化包名（忽略版本号）
+            pkg_name = re.split(r'[<>=!~\[]', pkg)[0].lower().replace("-", "_").replace(".", "_")
+            normalized_deps = {d.lower().replace("-", "_").replace(".", "_") for d in declared_deps}
+            if pkg_name not in normalized_deps:
+                missing_packages.append(pkg)
+        
+        if missing_packages:
+            return VerificationResult(
+                claim=command,
+                status="unverified",
+                message=f"Package(s) not declared in project dependencies: {', '.join(missing_packages)}",
+                severity="warning",
+                suggestion="Add to requirements.txt or pyproject.toml [project.dependencies]",
+            )
+        
+        return VerificationResult(
+            claim=command,
+            status="verified",
+            message="All packages declared in project dependencies",
+            severity="info",
+        )
+    
+    def _collect_declared_dependencies(self, repo_path: Path) -> set[str]:
+        """收集项目中声明的所有依赖"""
+        deps: set[str] = set()
+        
+        # requirements.txt
+        req_files = ["requirements.txt", "requirements-dev.txt", "requirements-test.txt"]
+        for req_file in req_files:
+            req_path = repo_path / req_file
+            if req_path.exists():
+                try:
+                    content = req_path.read_text(encoding="utf-8")
+                    for line in content.splitlines():
+                        line = line.strip()
+                        if line and not line.startswith("#") and not line.startswith("-"):
+                            # 提取包名（忽略版本号）
+                            pkg_name = re.split(r'[<>=!~\[]', line)[0].strip()
+                            if pkg_name:
+                                deps.add(pkg_name)
+                except Exception:
+                    pass
+        
+        # pyproject.toml
+        if tomllib:
+            pyproject_path = repo_path / "pyproject.toml"
+            if pyproject_path.exists():
+                try:
+                    content = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+                    # [project.dependencies]
+                    for dep in content.get("project", {}).get("dependencies", []):
+                        pkg_name = re.split(r'[<>=!~\[]', dep)[0].strip()
+                        if pkg_name:
+                            deps.add(pkg_name)
+                    # [project.optional-dependencies]
+                    for group_deps in content.get("project", {}).get("optional-dependencies", {}).values():
+                        for dep in group_deps:
+                            pkg_name = re.split(r'[<>=!~\[]', dep)[0].strip()
+                            if pkg_name:
+                                deps.add(pkg_name)
+                    # [tool.poetry.dependencies]
+                    poetry_deps = content.get("tool", {}).get("poetry", {}).get("dependencies", {})
+                    deps.update(poetry_deps.keys())
+                    # [tool.poetry.dev-dependencies]
+                    poetry_dev = content.get("tool", {}).get("poetry", {}).get("dev-dependencies", {})
+                    deps.update(poetry_dev.keys())
+                except Exception:
+                    pass
+        
+        # setup.py (简单正则)
+        setup_path = repo_path / "setup.py"
+        if setup_path.exists():
+            try:
+                content = setup_path.read_text(encoding="utf-8")
+                # install_requires = ["pkg1", "pkg2"]
+                match = re.search(r'install_requires\s*=\s*\[(.*?)\]', content, re.DOTALL)
+                if match:
+                    for pkg in re.findall(r'["\']([^"\']+)["\']', match.group(1)):
+                        pkg_name = re.split(r'[<>=!~\[]', pkg)[0].strip()
+                        if pkg_name:
+                            deps.add(pkg_name)
+            except Exception:
+                pass
+        
+        return deps
     
     def _verify_script(self, script: str, repo_path: Path) -> VerificationResult:
         """Verify a Python script exists."""

@@ -43,24 +43,151 @@ def _is_comment_line(line: str, language: str) -> bool:
     stripped = line.strip()
     if language == "python":
         return stripped.startswith('#')
-    elif language in ("javascript", "go"):
+    elif language in ("javascript", "go", "java", "rust", "c"):
         return stripped.startswith('//') or stripped.startswith('/*') or stripped.startswith('*')
     return False
 
 
+def _strip_comments(line: str, language: str) -> str:
+    """
+    移除行内注释，返回有效代码部分
+    
+    处理：
+    - Python: code # comment
+    - C-style: code // comment
+    - C-style: code /* comment */
+    - 字符串内的注释符号不会被误判
+    """
+    if language == "python":
+        # 简单处理：找到 # 但要避免字符串内的 #
+        in_string = None
+        for i, char in enumerate(line):
+            if char in ('"', "'") and (i == 0 or line[i-1] != '\\'):
+                if in_string is None:
+                    in_string = char
+                elif in_string == char:
+                    in_string = None
+            elif char == '#' and in_string is None:
+                return line[:i]
+        return line
+    
+    elif language in ("javascript", "go", "java", "rust", "c"):
+        # 处理 // 和 /* */ 注释，但要避免字符串内的
+        result = []
+        in_string = None
+        in_block_comment = False
+        i = 0
+        while i < len(line):
+            char = line[i]
+            
+            # 在块注释中
+            if in_block_comment:
+                if char == '*' and i + 1 < len(line) and line[i+1] == '/':
+                    in_block_comment = False
+                    i += 2
+                    continue
+                i += 1
+                continue
+            
+            # 检查字符串边界
+            if char in ('"', "'", '`') and (i == 0 or line[i-1] != '\\'):
+                if in_string is None:
+                    in_string = char
+                elif in_string == char:
+                    in_string = None
+                result.append(char)
+            # 检查 // 注释
+            elif char == '/' and i + 1 < len(line) and line[i+1] == '/' and in_string is None:
+                break  # 行尾注释，直接结束
+            # 检查 /* 块注释开始
+            elif char == '/' and i + 1 < len(line) and line[i+1] == '*' and in_string is None:
+                in_block_comment = True
+                i += 2
+                continue
+            else:
+                result.append(char)
+            i += 1
+        return ''.join(result)
+    
+    return line
+
+
+def _remove_block_comments(content: str, language: str) -> str:
+    """
+    移除跨行块注释 /* ... */
+    
+    这个函数在逐行处理之前调用，用于处理跨行的块注释
+    """
+    if language not in ("javascript", "go", "java", "rust", "c"):
+        return content
+    
+    result = []
+    in_string = None
+    in_block_comment = False
+    i = 0
+    
+    while i < len(content):
+        char = content[i]
+        
+        # 在块注释中
+        if in_block_comment:
+            if char == '*' and i + 1 < len(content) and content[i+1] == '/':
+                in_block_comment = False
+                i += 2
+                continue
+            # 保留换行符以维持行号
+            if char == '\n':
+                result.append(char)
+            i += 1
+            continue
+        
+        # 检查字符串边界（简化处理，不处理转义）
+        if char in ('"', "'", '`'):
+            if in_string is None:
+                in_string = char
+            elif in_string == char:
+                in_string = None
+            result.append(char)
+        # 检查 /* 块注释开始
+        elif char == '/' and i + 1 < len(content) and content[i+1] == '*' and in_string is None:
+            in_block_comment = True
+            i += 2
+            continue
+        else:
+            result.append(char)
+        i += 1
+    
+    return ''.join(result)
+
+
 def extract_env_vars(content: str, file_path: str, language: str) -> list[EnvVarUsage]:
-    """从代码中提取环境变量引用（正则模式）"""
+    """从代码中提取环境变量引用（正则模式）
+    
+    改进：
+    - 移除跨行块注释 /* ... */
+    - 跳过整行注释
+    - 移除行内注释后再匹配
+    - 避免注释中的误报
+    """
     env_vars: list[EnvVarUsage] = []
     patterns = ENV_VAR_PATTERNS.get(language, [])
     if not patterns:
         return env_vars
     
-    lines = content.split('\n')
+    # 先移除跨行块注释
+    cleaned_content = _remove_block_comments(content, language)
+    
+    lines = cleaned_content.split('\n')
     for line_num, line in enumerate(lines, 1):
+        # 跳过整行注释
         if _is_comment_line(line, language):
             continue
+        
+        # 移除行内注释，只匹配有效代码部分
+        code_part = _strip_comments(line, language)
+        
         for pattern, group_idx in patterns:
-            for match in pattern.finditer(line):
+            for match in pattern.finditer(code_part):
                 var_name = match.group(group_idx)
                 env_vars.append(EnvVarUsage(
                     name=var_name,
@@ -73,26 +200,50 @@ def extract_env_vars(content: str, file_path: str, language: str) -> list[EnvVar
 
 
 def extract_system_deps(content: str, file_path: str, language: str) -> list[SystemDependency]:
-    """从代码中提取系统依赖调用"""
+    """从代码中提取系统依赖调用
+    
+    改进：
+    - 移除跨行块注释 /* ... */
+    - 跳过整行注释
+    - 移除行内注释后再匹配
+    - 去重：同一行同一工具只报告一次
+    """
     deps: list[SystemDependency] = []
     patterns = SYSTEM_DEP_PATTERNS.get(language, [])
     if not patterns:
         return deps
     
-    lines = content.split('\n')
+    # 用于去重：(行号, 工具名)
+    seen: set[tuple[int, str]] = set()
+    
+    # 先移除跨行块注释
+    cleaned_content = _remove_block_comments(content, language)
+    
+    lines = cleaned_content.split('\n')
     for line_num, line in enumerate(lines, 1):
+        # 跳过整行注释
         if _is_comment_line(line, language):
             continue
+        
+        # 移除行内注释
+        code_part = _strip_comments(line, language)
+        
         for pattern, group_idx in patterns:
-            for match in pattern.finditer(line):
+            for match in pattern.finditer(code_part):
                 tool_name = match.group(group_idx)
-                if tool_name.lower() in COMMON_SYSTEM_TOOLS:
-                    deps.append(SystemDependency(
-                        tool_name=tool_name,
-                        file_path=file_path,
-                        line_number=line_num,
-                        invocation=line.strip()[:100],
-                    ))
+                tool_lower = tool_name.lower()
+                
+                # 检查是否在工具列表中，并去重
+                if tool_lower in COMMON_SYSTEM_TOOLS:
+                    key = (line_num, tool_lower)
+                    if key not in seen:
+                        seen.add(key)
+                        deps.append(SystemDependency(
+                            tool_name=tool_name,
+                            file_path=file_path,
+                            line_number=line_num,
+                            invocation=line.strip()[:100],
+                        ))
     return deps
 
 
