@@ -3,12 +3,14 @@
 Detects and verifies Python/pip/poetry projects.
 """
 
+import re
 import sys
 from pathlib import Path
 
 from readme_checker.plugins.base import (
     EcosystemInfo,
     EcosystemPlugin,
+    ProjectMetadata,
     VerificationResult,
     PluginRegistry,
 )
@@ -220,6 +222,99 @@ class PythonPlugin(EcosystemPlugin):
         if (repo_path / "setup.py").exists():
             files.append("setup.py")
         return files or ["pyproject.toml"]
+    
+    def extract_metadata(self, repo_path: Path) -> ProjectMetadata:
+        """
+        从 Python 项目提取元数据
+        
+        优先级：pyproject.toml > setup.py > setup.cfg
+        """
+        # 尝试 pyproject.toml
+        pyproject_path = repo_path / "pyproject.toml"
+        if pyproject_path.exists():
+            meta = self._extract_from_pyproject(pyproject_path)
+            if meta.version or meta.license:
+                return meta
+        
+        # 尝试 setup.py
+        setup_path = repo_path / "setup.py"
+        if setup_path.exists():
+            meta = self._extract_from_setup_py(setup_path)
+            if meta.version or meta.license:
+                return meta
+        
+        return ProjectMetadata(source_file="")
+    
+    def _extract_from_pyproject(self, path: Path) -> ProjectMetadata:
+        """从 pyproject.toml 提取元数据"""
+        if tomllib is None:
+            return ProjectMetadata(source_file=str(path))
+        
+        try:
+            content = tomllib.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return ProjectMetadata(source_file=str(path))
+        
+        # 尝试 [project] 部分 (PEP 621)
+        project = content.get("project", {})
+        name = project.get("name")
+        version = project.get("version")
+        license_info = project.get("license")
+        
+        # license 可能是字符串或字典
+        if isinstance(license_info, dict):
+            license_str = license_info.get("text") or license_info.get("file")
+        else:
+            license_str = license_info
+        
+        # 尝试 [tool.poetry] 部分
+        if not version:
+            poetry = content.get("tool", {}).get("poetry", {})
+            name = name or poetry.get("name")
+            version = poetry.get("version")
+            license_str = license_str or poetry.get("license")
+        
+        return ProjectMetadata(
+            name=name,
+            version=version,
+            license=license_str,
+            source_file=str(path),
+        )
+    
+    def _extract_from_setup_py(self, path: Path) -> ProjectMetadata:
+        """从 setup.py 提取元数据（使用正则表达式）"""
+        try:
+            content = path.read_text(encoding="utf-8")
+        except Exception:
+            return ProjectMetadata(source_file=str(path))
+        
+        # 提取 version
+        version_match = re.search(
+            r'version\s*=\s*["\']([^"\']+)["\']',
+            content
+        )
+        version = version_match.group(1) if version_match else None
+        
+        # 提取 name
+        name_match = re.search(
+            r'name\s*=\s*["\']([^"\']+)["\']',
+            content
+        )
+        name = name_match.group(1) if name_match else None
+        
+        # 提取 license
+        license_match = re.search(
+            r'license\s*=\s*["\']([^"\']+)["\']',
+            content
+        )
+        license_str = license_match.group(1) if license_match else None
+        
+        return ProjectMetadata(
+            name=name,
+            version=version,
+            license=license_str,
+            source_file=str(path),
+        )
 
 
 # Auto-register plugin

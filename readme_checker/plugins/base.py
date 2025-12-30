@@ -7,7 +7,7 @@ different language ecosystems.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Optional
 
 
 @dataclass
@@ -17,6 +17,23 @@ class EcosystemInfo:
     config_files: list[str]
     package_manager: str | None = None
     common_commands: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ProjectMetadata:
+    """
+    项目元数据
+    
+    Attributes:
+        name: 项目名称
+        version: 版本号
+        license: 许可证类型
+        source_file: 元数据来源文件
+    """
+    name: Optional[str] = None
+    version: Optional[str] = None
+    license: Optional[str] = None
+    source_file: str = ""
 
 
 @dataclass
@@ -56,6 +73,21 @@ class EcosystemPlugin(ABC):
     def get_expected_files(self, repo_path: Path) -> list[str]:
         """Get files expected to exist for this ecosystem."""
         pass
+    
+    def extract_metadata(self, repo_path: Path) -> ProjectMetadata:
+        """
+        提取项目元数据（版本号、许可证等）
+        
+        子类应重写此方法以提供具体实现。
+        默认返回空元数据。
+        
+        Args:
+            repo_path: 仓库根目录
+        
+        Returns:
+            ProjectMetadata 对象
+        """
+        return ProjectMetadata()
 
 
 class PluginRegistry:

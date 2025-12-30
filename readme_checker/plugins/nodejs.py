@@ -9,6 +9,7 @@ from pathlib import Path
 from readme_checker.plugins.base import (
     EcosystemInfo,
     EcosystemPlugin,
+    ProjectMetadata,
     VerificationResult,
     PluginRegistry,
 )
@@ -137,6 +138,24 @@ class NodeJsPlugin(EcosystemPlugin):
     def get_expected_files(self, repo_path: Path) -> list[str]:
         """Get expected files for Node.js project."""
         return ["package.json"]
+    
+    def extract_metadata(self, repo_path: Path) -> ProjectMetadata:
+        """从 package.json 提取元数据"""
+        pkg_path = repo_path / "package.json"
+        if not pkg_path.exists():
+            return ProjectMetadata(source_file="")
+        
+        try:
+            content = json.loads(pkg_path.read_text(encoding="utf-8"))
+        except Exception:
+            return ProjectMetadata(source_file=str(pkg_path))
+        
+        return ProjectMetadata(
+            name=content.get("name"),
+            version=content.get("version"),
+            license=content.get("license"),
+            source_file=str(pkg_path),
+        )
 
 
 # Auto-register plugin
