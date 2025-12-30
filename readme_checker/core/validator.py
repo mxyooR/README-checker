@@ -422,6 +422,8 @@ class Validator:
         self,
         parsed: ParsedMarkdown,
         readme_path: str = "README.md",
+        skip_links: bool = False,
+        skip_code_blocks: bool = False,
     ) -> ValidationResult:
         """
         执行所有验证
@@ -429,6 +431,8 @@ class Validator:
         Args:
             parsed: 解析后的 Markdown
             readme_path: README 文件路径
+            skip_links: 跳过链接验证
+            skip_code_blocks: 跳过代码块验证
         
         Returns:
             验证结果
@@ -436,20 +440,22 @@ class Validator:
         result = ValidationResult()
         
         # 链接验证
-        link_issues = self.validate_links(parsed.links, parsed.headers, readme_path)
-        result.issues.extend(link_issues)
-        
-        # 锚点验证
-        anchor_issues = self.validate_anchors(parsed.links, parsed.headers, readme_path)
-        result.issues.extend(anchor_issues)
-        
-        # 绝对 URL 检测
-        url_issues = self.detect_absolute_urls(parsed.links, readme_path)
-        result.issues.extend(url_issues)
+        if not skip_links:
+            link_issues = self.validate_links(parsed.links, parsed.headers, readme_path)
+            result.issues.extend(link_issues)
+            
+            # 锚点验证
+            anchor_issues = self.validate_anchors(parsed.links, parsed.headers, readme_path)
+            result.issues.extend(anchor_issues)
+            
+            # 绝对 URL 检测
+            url_issues = self.detect_absolute_urls(parsed.links, readme_path)
+            result.issues.extend(url_issues)
         
         # 代码块验证
-        block_issues = self.validate_code_blocks(parsed.code_blocks, readme_path)
-        result.issues.extend(block_issues)
+        if not skip_code_blocks:
+            block_issues = self.validate_code_blocks(parsed.code_blocks, readme_path)
+            result.issues.extend(block_issues)
         
         # 统计
         result.stats["total_links"] = len(parsed.links)

@@ -168,6 +168,10 @@ def validate_commands(
     return issues
 
 
+# 可忽略的检查类型
+IGNORE_CHOICES = ["links", "code-blocks", "env-vars", "deps", "version", "license", "commands"]
+
+
 @app.command()
 def check(
     target: str = typer.Argument(
@@ -178,13 +182,19 @@ def check(
         False,
         "--verbose",
         "-v",
-        help="Show detailed output",
+        help="Show detailed output (scanned files, parsed elements)",
     ),
     format: str = typer.Option(
         "rich",
         "--format",
         "-f",
         help="Output format: rich (default) or json",
+    ),
+    ignore: Optional[list[str]] = typer.Option(
+        None,
+        "--ignore",
+        "-i",
+        help="Ignore specific checks: links, code-blocks, env-vars, deps, version, license, commands",
     ),
     repo_url: Optional[str] = typer.Option(
         None,
@@ -196,11 +206,24 @@ def check(
     Check a project's README for consistency with codebase.
     
     Examples:
-        checker check
-        checker check ./my-project
-        checker check --format json
-        checker check -v --repo-url "github.com/user/repo"
+        checker check                          # Check current directory
+        checker check ./my-project             # Check specific project
+        checker check -v                       # Verbose mode
+        checker check --format json            # JSON output
+        checker check -i version -i license    # Ignore version and license checks
+        checker check --ignore env-vars        # Ignore environment variable checks
     """
+    # 解析忽略选项
+    ignored_checks: set[str] = set()
+    if ignore:
+        for item in ignore:
+            if item in IGNORE_CHOICES:
+                ignored_checks.add(item)
+            else:
+                console.print(f"[yellow]Warning:[/yellow] Unknown ignore option '{item}', valid options: {', '.join(IGNORE_CHOICES)}")
+    
+    if verbose and ignored_checks:
+        console.print(f"[dim]Ignoring checks: {', '.join(ignored_checks)}[/dim]")
     repo_path = Path(target).resolve()
     
     if not repo_path.exists():
@@ -272,57 +295,67 @@ def check(
     
     validator = Validator(repo_path, repo_url_pattern=repo_url)
     
-    # 基础验证
-    result = validator.validate_all(parsed, str(readme_path.relative_to(repo_path)))
+    # 基础验证（链接和代码块）
+    result = validator.validate_all(
+        parsed, 
+        str(readme_path.relative_to(repo_path)),
+        skip_links="links" in ignored_checks,
+        skip_code_blocks="code-blocks" in ignored_checks,
+    )
     
     # 环境变量验证
-    env_example_path = repo_path / ".env.example"
-    env_issues = validator.validate_env_vars(
-        scan_result.env_vars,
-        readme_content,
-        env_example_path if env_example_path.exists() else None,
-    )
-    result.issues.extend(env_issues)
+    if "env-vars" not in ignored_checks:
+        env_example_path = repo_path / ".env.example"
+        env_issues = validator.validate_env_vars(
+            scan_result.env_vars,
+            readme_content,
+            env_example_path if env_example_path.exists() else None,
+        )
+        result.issues.extend(env_issues)
     
     # 系统依赖验证
-    dep_issues = validator.validate_system_deps(
-        scan_result.system_deps,
-        readme_content,
-    )
-    result.issues.extend(dep_issues)
+    if "deps" not in ignored_checks:
+        dep_issues = validator.validate_system_deps(
+            scan_result.system_deps,
+            readme_content,
+        )
+        result.issues.extend(dep_issues)
     
-    # 命令验证（新功能）
+    # 命令验证
     commands = extract_commands_from_readme(readme_content)
     if verbose and commands:
         console.print(f"[dim]  - {len(commands)} commands found in README[/dim]")
-    cmd_issues = validate_commands(
-        commands, plugin, repo_path, str(readme_path.relative_to(repo_path))
-    )
-    result.issues.extend(cmd_issues)
-
+    
+    if "commands" not in ignored_checks:
+        cmd_issues = validate_commands(
+            commands, plugin, repo_path, str(readme_path.relative_to(repo_path))
+        )
+        result.issues.extend(cmd_issues)
     
     # 元数据验证
     if metadata:
-        version_issues = validator.validate_version(
-            readme_content,
-            metadata.version,
-        )
-        result.issues.extend(version_issues)
+        if "version" not in ignored_checks:
+            version_issues = validator.validate_version(
+                readme_content,
+                metadata.version,
+            )
+            result.issues.extend(version_issues)
         
-        license_file = repo_path / "LICENSE"
-        license_content = None
-        if license_file.exists():
-            try:
-                license_content = license_file.read_text(encoding="utf-8")
-            except Exception:
-                pass
-        
-        license_issues = validator.validate_license(
-            readme_content,
-            metadata.license,
-            license_content,
-        )
-        result.issues.extend(license_issues)
+        if "license" not in ignored_checks:
+            license_file = repo_path / "LICENSE"
+            license_content = None
+            if license_file.exists():
+                try:
+                    license_content = license_file.read_text(encoding="utf-8")
+                except Exception:
+                    pass
+            
+            license_issues = validator.validate_license(
+                readme_content,
+                metadata.license,
+                license_content,
+            )
+            result.issues.extend(license_issues)
     
     # 更新统计
     result.stats["total_issues"] = len(result.issues)
