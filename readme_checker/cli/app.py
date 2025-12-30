@@ -25,12 +25,12 @@ from readme_checker.core.parser import CodeBlock
 from readme_checker.plugins.base import PluginRegistry
 from readme_checker.reporters import RichReporter, JsonReporter
 
-# 创建 Typer 应用实例
+# 创建 Typer 应用实例（不使用子命令模式）
 app = typer.Typer(
     name="checker",
     help="README-Checker: Static documentation linter for CI/CD.",
     add_completion=False,
-    context_settings={"help_option_names": ["-h", "--help"]},  # 支持 -h
+    invoke_without_command=True,
 )
 
 # Rich Console 用于输出（legacy_windows=False 支持 emoji）
@@ -154,11 +154,12 @@ def validate_commands(
 IGNORE_CHOICES = ["links", "code-blocks", "env-vars", "deps", "version", "license", "commands"]
 
 
-@app.command()
-def check(
+@app.callback(invoke_without_command=True)
+def main(
+    ctx: typer.Context,
     target: str = typer.Argument(
         ".",
-        help="Path to local project to check",
+        help="Path to project directory to check",
     ),
     verbose: bool = typer.Option(
         False,
@@ -183,18 +184,31 @@ def check(
         "--repo-url",
         help="Repository URL pattern for absolute URL detection",
     ),
+    version: bool = typer.Option(
+        False,
+        "--version",
+        "-V",
+        help="Show version and exit",
+        is_eager=True,
+    ),
 ) -> None:
     """
-    Check a project's README for consistency with codebase.
+    README-Checker: Static documentation linter for CI/CD.
     
+    \b
     Examples:
-        checker check                          # Check current directory
-        checker check ./my-project             # Check specific project
-        checker check -v                       # Verbose mode
-        checker check --format json            # JSON output
-        checker check -i version -i license    # Ignore version and license checks
-        checker check --ignore env-vars        # Ignore environment variable checks
+        checker                     Check current directory
+        checker ./my-project        Check specific project
+        checker -v ./my-project     Verbose mode
+        checker -f json             JSON output for CI/CD
+        checker -i env-vars         Ignore environment variable checks
     """
+    # 显示版本
+    if version:
+        from readme_checker import __version__
+        console.print(f"README-Checker v{__version__}")
+        raise typer.Exit()
+    
     # 解析忽略选项
     ignored_checks: set[str] = set()
     if ignore:
@@ -202,10 +216,12 @@ def check(
             if item in IGNORE_CHOICES:
                 ignored_checks.add(item)
             else:
-                console.print(f"[yellow]Warning:[/yellow] Unknown ignore option '{item}', valid options: {', '.join(IGNORE_CHOICES)}")
+                console.print(f"[yellow]Warning:[/yellow] Unknown ignore option '{item}'")
+                console.print(f"[dim]Valid options: {', '.join(IGNORE_CHOICES)}[/dim]")
     
     if verbose and ignored_checks:
         console.print(f"[dim]Ignoring checks: {', '.join(ignored_checks)}[/dim]")
+    
     repo_path = Path(target).resolve()
     
     if not repo_path.exists():
@@ -303,7 +319,7 @@ def check(
         )
         result.issues.extend(dep_issues)
     
-    # 命令验证（复用已解析的 code_blocks，不再重复解析）
+    # 命令验证（复用已解析的 code_blocks）
     commands = extract_commands_from_code_blocks(parsed.code_blocks)
     if verbose and commands:
         console.print(f"[dim]  - {len(commands)} commands found in README[/dim]")
@@ -360,43 +376,6 @@ def check(
         raise typer.Exit(1)
     else:
         raise typer.Exit(0)
-
-
-@app.command()
-def version() -> None:
-    """Show the version of README-Checker."""
-    from readme_checker import __version__
-    console.print(f"[bold]README-Checker[/bold] v{__version__}")
-
-
-def _version_callback(value: bool) -> None:
-    """版本号回调函数"""
-    if value:
-        from readme_checker import __version__
-        console.print(f"[bold]README-Checker[/bold] v{__version__}")
-        raise typer.Exit()
-
-
-@app.callback(invoke_without_command=True)
-def main(
-    ctx: typer.Context,
-    version: bool = typer.Option(
-        False,
-        "--version",
-        "-V",
-        help="Show version and exit",
-        callback=_version_callback,
-        is_eager=True,
-    ),
-) -> None:
-    """
-    README-Checker: Static documentation linter for CI/CD.
-    
-    Run 'checker check' to check current directory, or 'checker -h' for help.
-    """
-    # 如果没有子命令，默认运行 check（使用 ctx.invoke 正确传递参数）
-    if ctx.invoked_subcommand is None:
-        ctx.invoke(check, target=".", verbose=False, format="rich", repo_url=None)
 
 
 if __name__ == "__main__":
