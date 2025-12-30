@@ -259,6 +259,71 @@ class Validator:
         
         return issues
     
+    def _is_directory_tree(self, content: str) -> bool:
+        """
+        判断代码块内容是否为目录树结构
+        
+        目录树特征：
+        - 包含 │ ├ └ ─ 等树形字符
+        - 包含文件扩展名（.py, .js, .cpp 等）
+        - 行以 │ 或空格开头
+        """
+        tree_chars = {'│', '├', '└', '─', '┌', '┐', '┘', '┬', '┴', '┼', '|', '+', '\\'}
+        lines = content.strip().split('\n')
+        
+        if not lines:
+            return False
+        
+        tree_line_count = 0
+        for line in lines:
+            # 检查是否包含树形字符
+            if any(c in line for c in tree_chars):
+                tree_line_count += 1
+            # 检查是否像文件路径（包含 / 或 \ 和扩展名）
+            elif re.search(r'[\\/].*\.\w+', line):
+                tree_line_count += 1
+        
+        # 如果超过 50% 的行看起来像目录树，认为是目录树
+        return tree_line_count > len(lines) * 0.5
+    
+    def _is_plain_text_output(self, content: str) -> bool:
+        """
+        判断代码块内容是否为纯文本输出（非代码）
+        
+        纯文本特征：
+        - 没有明显的代码语法（函数调用、变量赋值等）
+        - 主要是描述性文字
+        - 内容较长（短内容可能是代码片段）
+        """
+        lines = content.strip().split('\n')
+        
+        if not lines:
+            return False
+        
+        # 短内容（少于 3 行或总字符少于 50）不认为是纯文本
+        total_chars = sum(len(line) for line in lines)
+        if len(lines) < 3 and total_chars < 50:
+            return False
+        
+        # 代码特征模式
+        code_patterns = [
+            r'^\s*(def|class|function|const|let|var|import|from|export)\s',
+            r'^\s*(if|for|while|switch|try|catch)\s*[\(\{]',
+            r'[=;{}()\[\]]',  # 常见代码符号
+            r'^\s*#include\s*<',  # C/C++ include
+            r'^\s*package\s+\w+',  # Java/Go package
+        ]
+        
+        code_line_count = 0
+        for line in lines:
+            for pattern in code_patterns:
+                if re.search(pattern, line):
+                    code_line_count += 1
+                    break
+        
+        # 如果代码行少于 20%，可能是纯文本
+        return code_line_count < len(lines) * 0.2
+
     def validate_code_blocks(
         self,
         code_blocks: list[CodeBlock],
@@ -284,6 +349,12 @@ class Validator:
         for block in code_blocks:
             # 检查语言标记
             if not block.language:
+                # 智能检测：如果是目录树或纯文本，不报警告
+                if self._is_directory_tree(block.content):
+                    continue  # 目录树不需要语言标记
+                if self._is_plain_text_output(block.content):
+                    continue  # 纯文本输出不需要语言标记
+                
                 issues.append(Issue(
                     severity="warning",
                     code="MISSING_LANG_TAG",

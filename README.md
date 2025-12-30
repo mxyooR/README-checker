@@ -8,30 +8,35 @@
   <a href="#installation">Installation</a> •
   <a href="#quick-start">Quick Start</a> •
   <a href="#features">Features</a> •
-  <a href="#how-it-works">How It Works</a> •
+  <a href="#supported-languages">Supported Languages</a> •
   <a href="#cli-reference">CLI Reference</a> •
   <a href="./README_CN.md">中文文档</a>
 </p>
 
 ---
 
-README-Checker is a CLI tool that analyzes GitHub project README files for **truthfulness** and **consistency**. It detects phantom commands, broken links, missing config files, and over-hyped descriptions that don't match the actual codebase.
+README-Checker is a static documentation linter that validates your README against your actual codebase. It detects undocumented environment variables, broken links, invalid commands, and inconsistent metadata.
 
 ## Why?
 
 Ever cloned a repo only to find:
 
-- 📦 `pip install` fails because there's no `pyproject.toml`
+- 🔐 Environment variables used in code but never documented
 - 🔗 Links to `./docs/guide.md` that don't exist
-- 🎭 "Enterprise solution" with 50 lines of code
-- ✅ "Complete" project with 200 TODOs in the source
+- 📦 `npm run build` fails because there's no `build` script
+- 📋 Version in README doesn't match `package.json`
 
-README-Checker catches these lies before you waste time.
+README-Checker catches these issues before your users do.
 
 ## Installation
 
 ```bash
-# From source
+pip install readme-checker
+```
+
+Or install from source:
+
+```bash
 git clone https://github.com/user/readme-checker.git
 cd readme-checker
 pip install -e .
@@ -40,124 +45,175 @@ pip install -e .
 ### Requirements
 
 - Python 3.10+
-- Dependencies: `typer`, `rich`, `markdown-it-py`, `gitpython`, `pathspec`
 
 ## Quick Start
 
 ```bash
 # Check current directory
-checker check .
+checker
 
-# Check a GitHub repository
-checker check https://github.com/user/repo
+# Check a specific project
+checker check ./my-project
 
-# Verbose output
-checker check . -v
+# Verbose output (shows scanned files)
+checker check -v
+
+# JSON output for CI/CD
+checker check --format json
 
 # Show version
-checker version
+checker -V
 ```
 
 ## Features
 
-### 🔍 Ecosystem Verification
+### 🔐 Environment Variable Detection
 
-Detects build tool references and verifies config files exist. Supports Python, Node.js, Rust, Go, Java, and Docker ecosystems.
+Scans your codebase for environment variable usage and verifies they're documented in README or `.env.example`.
 
-### 🔗 Path Verification
+**Supported patterns:**
+- Python: `os.getenv()`, `os.environ[]`, pydantic `BaseSettings`, python-decouple, django-environ
+- JavaScript/TypeScript: `process.env.KEY`, `process.env["KEY"]`, NestJS ConfigService
+- Go: `os.Getenv()`, `os.LookupEnv()`
+- C/C++: `getenv()`, `std::getenv()`
+- Java: `System.getenv()`, `System.getProperty()`
+- Rust: `std::env::var()`, `env::var()`
 
-Validates all file/folder references in the README:
+### 🔗 Link Validation
 
-- Markdown links: `[Guide](./docs/guide.md)`
-- Images: `![Logo](./assets/logo.png)`
-- Code references: mentions of `src/main.py`
+Validates all links in your README:
+- ✅ Relative file links exist
+- ✅ Anchor links point to valid headers
+- ⚠️ Warns about absolute URLs to your own repo
 
-### 💻 Command Validation
+### 📝 Code Block Validation
 
-Checks that commands in code blocks are executable:
+- Checks for missing language identifiers
+- Validates JSON syntax in code blocks
+- Validates YAML syntax in code blocks
+- Smart detection: skips directory trees and plain text
 
-- Verifies scripts exist in build configs
-- Validates Makefile targets
-- Checks Python entry points in `pyproject.toml`
+### 💻 Command Verification
 
-### 📊 Trust Score (0-100)
+Verifies commands in README code blocks actually work:
+- **Python**: Checks `pip install`, `poetry run`, script existence
+- **Node.js**: Validates `npm run` scripts exist in `package.json`
+- **Go**: Verifies `go run`, `go build` targets
+- **Java**: Checks Maven/Gradle commands and wrappers
 
-Calculates a truthfulness score based on:
+### 📊 Metadata Consistency
 
-- Ecosystem claim accuracy
-- Path validity
-- Command existence
-- Hype-to-code ratio
-- TODO density
+Extracts metadata from your project config and compares with README:
+- Version number consistency
+- License consistency
 
-### 🎭 Hype Detection
+### 🔧 System Dependency Detection
 
-Flags over-hyped descriptions that don't match codebase scale:
+Detects system tool calls in code (subprocess, exec, etc.) and warns if not documented:
+- `ffmpeg`, `docker`, `kubectl`, `git`, etc.
 
-- Big claims with small codebases
-- High TODO count with completion claims
+## Supported Languages
 
-### ✅ TODO Trap Detection
-
-Catches "complete" projects full of unfinished work:
-
-- Counts `TODO`, `FIXME`, `HACK`, `XXX` in source
-- Compares against project completion claims
-
-## How It Works
-
-```
-README.md → Parse → Extract Claims → Verify Against Codebase → Score
-```
-
-1. **Parse**: Extract code blocks, links, and text from README using `markdown-it-py`
-2. **Extract**: Identify ecosystem claims, paths, commands, hype words
-3. **Verify**: Check each claim against the actual repository
-4. **Score**: Calculate trust score based on verification results
+| Language | Env Var Detection | AST Parsing | Command Verification |
+|----------|-------------------|-------------|---------------------|
+| Python | ✅ Full | ✅ AST | ✅ pip, poetry |
+| JavaScript/TypeScript | ✅ Full | ✅ esprima | ✅ npm, yarn |
+| Go | ✅ Regex | ❌ | ✅ go commands |
+| Java | ✅ Regex | ❌ | ✅ mvn, gradle |
+| C/C++ | ✅ Regex | ❌ | ❌ |
+| Rust | ✅ Regex | ❌ | ❌ |
 
 ## CLI Reference
 
-### `checker check <target>`
+### `checker` / `checker check [PATH]`
 
-Check a project's README for truthfulness.
+Check a project's README for consistency with codebase.
+
+```bash
+checker                          # Check current directory
+checker check .                  # Same as above
+checker check ./my-project       # Check specific path
+checker check -v                 # Verbose output
+checker check -f json            # JSON output
+checker check --repo-url "github.com/user/repo"  # Detect absolute URLs
+```
 
 | Option | Description |
 |--------|-------------|
-| `<target>` | Path to local project or GitHub URL |
-| `-r, --root` | Subdirectory for monorepo analysis |
-| `-t, --timeout` | Clone timeout in seconds (default: 60) |
-| `-v, --verbose` | Show detailed output |
-| `-d, --dynamic` | Enable dynamic command verification |
-| `--dry-run` | Syntax validation only (with --dynamic) |
-| `--cmd-timeout` | Command execution timeout (default: 300s) |
-| `--allow-network` | Allow network access during execution |
+| `PATH` | Path to project (default: `.`) |
+| `-v, --verbose` | Show detailed output including scanned files |
+| `-f, --format` | Output format: `rich` (default) or `json` |
+| `--repo-url` | Repository URL pattern for absolute URL detection |
 
 ### `checker version`
 
 Show version information.
 
-## Trust Score Ratings
+### `checker -V` / `checker --version`
 
-| Score | Rating | Meaning |
-|-------|--------|---------|
-| 90-100 | ✅ Trustworthy | What you see is what you get |
-| 70-89 | ⚠️ Suspicious | Some claims don't match reality |
-| 0-69 | ❌ Liar | Significant discrepancies found |
+Show version and exit.
+
+### `checker -h` / `checker --help`
+
+Show help message.
+
+## Output Example
+
+```
+╭─────────────────────────────────────────────────────────────────╮
+│ 🔍 README-Checker Report                                        │
+│ Target: ./my-project                                            │
+╰─────────────────────────────────────────────────────────────────╯
+┏━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Check       ┃ Status ┃ Details              ┃
+┡━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━┩
+│ Links       │ ✅     │ All valid            │
+│ Code Blocks │ ✅     │ All valid            │
+│ Env Vars    │ ❌     │ 2 undocumented       │
+│ System Deps │ ✅     │ All documented       │
+│ Metadata    │ ✅     │ Consistent           │
+└─────────────┴────────┴──────────────────────┘
+
+Issues Found:
+  • [ERROR] Environment variable 'API_KEY' used in code but not documented
+    src/config.py:15
+    → Add 'API_KEY' to README or .env.example
+```
+
+## CI/CD Integration
+
+### GitHub Actions
+
+```yaml
+- name: Check README
+  run: |
+    pip install readme-checker
+    checker check --format json > report.json
+```
+
+### Exit Codes
+
+- `0`: All checks passed (warnings are OK)
+- `1`: Errors found
 
 ## Project Structure
 
 ```
 readme_checker/
-├── cli/          # CLI interface (Typer + Rich)
-├── parsing/      # Markdown parsing & claim extraction
-├── verification/ # Claim verification & scoring
-├── repo/         # Repository loading & gitignore handling
-├── nlp/          # Intent classification for commands
-├── dynamic/      # Dynamic command verification
-├── build/        # Build system detection
-├── metrics/      # LOC & TODO counting
-├── plugins/      # Language-specific plugins (Python, Node, Go, Java)
-└── sandbox/      # Sandboxed command execution
+├── cli/           # CLI interface (Typer)
+│   └── app.py     # Main CLI commands
+├── core/          # Core functionality
+│   ├── parser.py  # Markdown parsing
+│   ├── scanner.py # Code scanning (AST + regex)
+│   └── validator.py # Validation logic
+├── plugins/       # Language plugins
+│   ├── python.py  # Python ecosystem
+│   ├── nodejs.py  # Node.js ecosystem
+│   ├── golang.py  # Go ecosystem
+│   └── java.py    # Java ecosystem
+└── reporters/     # Output formatters
+    ├── rich_reporter.py  # Rich terminal output
+    └── json_reporter.py  # JSON output
 ```
 
 ## Development
@@ -168,26 +224,17 @@ pip install -e ".[dev]"
 
 # Run tests
 pytest tests/ -v
+
+# Run with coverage
+pytest tests/ --cov=readme_checker
 ```
-
-## Status
-
-🚧 **Work in Progress** - This project is under active development.
-
-## Contributing
-
-Contributions welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch
-3. Submit a pull request
 
 ## License
 
-MIT License - see LICENSE file for details.
+MIT License - see [LICENSE](LICENSE) file for details.
 
 ---
 
 <p align="center">
-  <em>Built with ❤️ to fight README lies</em>
+  <em>Built with ❤️ to keep documentation honest</em>
 </p>

@@ -8,6 +8,7 @@ CLI 入口模块 - 使用 Typer 构建命令行界面
 4. 生成报告
 """
 
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -20,8 +21,11 @@ from readme_checker.core import (
     Validator,
     ValidationResult,
 )
+from readme_checker.core.validator import Issue
 from readme_checker.plugins.python import PythonPlugin
 from readme_checker.plugins.nodejs import NodeJsPlugin
+from readme_checker.plugins.golang import GoPlugin
+from readme_checker.plugins.java import JavaPlugin
 from readme_checker.reporters import RichReporter, JsonReporter
 
 # 创建 Typer 应用实例
@@ -29,10 +33,11 @@ app = typer.Typer(
     name="checker",
     help="README-Checker: Static documentation linter for CI/CD.",
     add_completion=False,
+    context_settings={"help_option_names": ["-h", "--help"]},  # 支持 -h
 )
 
-# Rich Console 用于输出
-console = Console()
+# Rich Console 用于输出（legacy_windows=False 支持 emoji）
+console = Console(legacy_windows=False)
 
 
 def detect_project_type(repo_path: Path) -> str | None:
@@ -43,7 +48,7 @@ def detect_project_type(repo_path: Path) -> str | None:
         return "nodejs"
     if (repo_path / "go.mod").exists():
         return "go"
-    if (repo_path / "pom.xml").exists():
+    if (repo_path / "pom.xml").exists() or (repo_path / "build.gradle").exists() or (repo_path / "build.gradle.kts").exists():
         return "java"
     return None
 
@@ -54,6 +59,10 @@ def get_plugin(project_type: str | None):
         return PythonPlugin()
     if project_type == "nodejs":
         return NodeJsPlugin()
+    if project_type == "go":
+        return GoPlugin()
+    if project_type == "java":
+        return JavaPlugin()
     return None
 
 
@@ -65,6 +74,87 @@ def find_readme(repo_path: Path) -> Path | None:
         if readme_path.exists():
             return readme_path
     return None
+
+
+def extract_commands_from_readme(content: str) -> list[tuple[str, int]]:
+    """
+    从 README 中提取命令
+    
+    提取代码块中的 shell 命令（bash, sh, shell, console, terminal）
+    
+    Returns:
+        [(command, line_number), ...]
+    """
+    commands: list[tuple[str, int]] = []
+    
+    # 匹配代码块
+    code_block_pattern = re.compile(
+        r'^```(bash|sh|shell|console|terminal|zsh)?\s*\n(.*?)^```',
+        re.MULTILINE | re.DOTALL
+    )
+    
+    lines = content.split('\n')
+    current_pos = 0
+    
+    for match in code_block_pattern.finditer(content):
+        block_content = match.group(2)
+        # 计算行号
+        line_num = content[:match.start()].count('\n') + 2
+        
+        for i, line in enumerate(block_content.split('\n')):
+            line = line.strip()
+            # 跳过空行和注释
+            if not line or line.startswith('#'):
+                continue
+            # 移除 $ 或 > 提示符
+            if line.startswith('$ '):
+                line = line[2:]
+            elif line.startswith('> '):
+                line = line[2:]
+            
+            # 只提取看起来像命令的行
+            if any(line.startswith(cmd) for cmd in [
+                'npm ', 'yarn ', 'pnpm ', 'npx ',
+                'python ', 'python3 ', 'pip ', 'poetry ', 'pipenv ',
+                'go ', 'cargo ', 'rustc ',
+                'make ', 'cmake ',
+                'docker ', 'kubectl ',
+                'mvn ', './mvnw ', 'gradle ', './gradlew ',  # Java
+            ]):
+                commands.append((line, line_num + i))
+    
+    return commands
+
+
+def validate_commands(
+    commands: list[tuple[str, int]],
+    plugin,
+    repo_path: Path,
+    readme_path: str,
+) -> list[Issue]:
+    """
+    验证 README 中的命令是否有效
+    
+    使用 plugin.verify_command() 检查命令
+    """
+    issues: list[Issue] = []
+    
+    if not plugin:
+        return issues
+    
+    for cmd, line_num in commands:
+        result = plugin.verify_command(cmd, repo_path)
+        if result and result.status == "missing":
+            issues.append(Issue(
+                severity="warning",
+                code="INVALID_COMMAND",
+                message=f"Command may not work: {cmd}",
+                file_path=readme_path,
+                line_number=line_num,
+                suggestion=result.suggestion or result.message,
+            ))
+    
+    return issues
 
 
 @app.command()
@@ -154,7 +244,6 @@ def check(
     if verbose:
         console.print(f"[dim]  - {len(scan_result.env_vars)} env var usages[/dim]")
         console.print(f"[dim]  - {len(scan_result.system_deps)} system deps[/dim]")
-
     
     # 4. 检测项目类型并提取元数据
     project_type = detect_project_type(repo_path)
@@ -191,6 +280,16 @@ def check(
     )
     result.issues.extend(dep_issues)
     
+    # 命令验证（新功能）
+    commands = extract_commands_from_readme(readme_content)
+    if verbose and commands:
+        console.print(f"[dim]  - {len(commands)} commands found in README[/dim]")
+    cmd_issues = validate_commands(
+        commands, plugin, repo_path, str(readme_path.relative_to(repo_path))
+    )
+    result.issues.extend(cmd_issues)
+
+    
     # 元数据验证
     if metadata:
         version_issues = validator.validate_version(
@@ -220,6 +319,7 @@ def check(
     result.stats["warnings"] = sum(1 for i in result.issues if i.severity == "warning")
     result.stats["env_vars_found"] = len(scan_result.env_vars)
     result.stats["system_deps_found"] = len(scan_result.system_deps)
+    result.stats["commands_found"] = len(commands)
     
     # 6. 生成报告
     if format == "json":
@@ -241,6 +341,36 @@ def version() -> None:
     """Show the version of README-Checker."""
     from readme_checker import __version__
     console.print(f"[bold]README-Checker[/bold] v{__version__}")
+
+
+def _version_callback(value: bool) -> None:
+    """版本号回调函数"""
+    if value:
+        from readme_checker import __version__
+        console.print(f"[bold]README-Checker[/bold] v{__version__}")
+        raise typer.Exit()
+
+
+@app.callback(invoke_without_command=True)
+def main(
+    ctx: typer.Context,
+    version: bool = typer.Option(
+        False,
+        "--version",
+        "-V",
+        help="Show version and exit",
+        callback=_version_callback,
+        is_eager=True,
+    ),
+) -> None:
+    """
+    README-Checker: Static documentation linter for CI/CD.
+    
+    Run 'checker check' to check current directory, or 'checker -h' for help.
+    """
+    # 如果没有子命令，默认运行 check（使用 ctx.invoke 正确传递参数）
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(check, target=".", verbose=False, format="rich", repo_url=None)
 
 
 if __name__ == "__main__":

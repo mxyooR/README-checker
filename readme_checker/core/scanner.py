@@ -926,6 +926,28 @@ ENV_VAR_PATTERNS: dict[str, list[tuple[re.Pattern, int]]] = {
         # os.LookupEnv("KEY")
         (re.compile(r'os\.LookupEnv\s*\(\s*["\'](\w+)["\']'), 1),
     ],
+    "c": [
+        # getenv("KEY")
+        (re.compile(r'\bgetenv\s*\(\s*["\'](\w+)["\']'), 1),
+        # std::getenv("KEY")
+        (re.compile(r'std::getenv\s*\(\s*["\'](\w+)["\']'), 1),
+    ],
+    "java": [
+        # System.getenv("KEY")
+        (re.compile(r'System\.getenv\s*\(\s*["\'](\w+)["\']'), 1),
+        # System.getProperty("KEY")
+        (re.compile(r'System\.getProperty\s*\(\s*["\'](\w+)["\']'), 1),
+    ],
+    "rust": [
+        # std::env::var("KEY")
+        (re.compile(r'std::env::var\s*\(\s*["\'](\w+)["\']'), 1),
+        # env::var("KEY")
+        (re.compile(r'\benv::var\s*\(\s*["\'](\w+)["\']'), 1),
+        # std::env::var_os("KEY")
+        (re.compile(r'std::env::var_os\s*\(\s*["\'](\w+)["\']'), 1),
+        # env::var_os("KEY")
+        (re.compile(r'\benv::var_os\s*\(\s*["\'](\w+)["\']'), 1),
+    ],
 }
 
 # 系统依赖提取模式
@@ -950,6 +972,26 @@ SYSTEM_DEP_PATTERNS: dict[str, list[tuple[re.Pattern, int]]] = {
         # exec.Command("ffmpeg", ...)
         (re.compile(r'exec\.Command\s*\(\s*["\'](\w+)["\']'), 1),
     ],
+    "c": [
+        # system("ffmpeg ...")
+        (re.compile(r'\bsystem\s*\(\s*["\'](\w+)'), 1),
+        # popen("ffmpeg ...")
+        (re.compile(r'\bpopen\s*\(\s*["\'](\w+)'), 1),
+        # execl("/usr/bin/ffmpeg", ...)
+        (re.compile(r'\bexecl?\s*\(\s*["\'][^"\']*?(\w+)["\']'), 1),
+    ],
+    "java": [
+        # Runtime.getRuntime().exec("ffmpeg")
+        (re.compile(r'\.exec\s*\(\s*["\'](\w+)'), 1),
+        # ProcessBuilder("ffmpeg", ...)
+        (re.compile(r'ProcessBuilder\s*\(\s*["\'](\w+)["\']'), 1),
+    ],
+    "rust": [
+        # Command::new("ffmpeg")
+        (re.compile(r'Command::new\s*\(\s*["\'](\w+)["\']'), 1),
+        # process::Command::new("ffmpeg")
+        (re.compile(r'process::Command::new\s*\(\s*["\'](\w+)["\']'), 1),
+    ],
 }
 
 # 文件扩展名到语言的映射
@@ -962,6 +1004,15 @@ EXTENSION_TO_LANGUAGE: dict[str, str] = {
     ".mjs": "javascript",
     ".cjs": "javascript",
     ".go": "go",
+    ".c": "c",
+    ".cpp": "c",
+    ".cc": "c",
+    ".cxx": "c",
+    ".h": "c",
+    ".hpp": "c",
+    ".hxx": "c",
+    ".java": "java",
+    ".rs": "rust",
 }
 
 # 常见的系统工具（用于过滤）
